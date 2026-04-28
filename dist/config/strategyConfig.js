@@ -1,0 +1,33 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.strategyConfig = void 0;
+exports.strategyConfig = {
+    // Filters
+    MIN_LIQUIDITY_USD: 10000,
+    MAX_LIQUIDITY_USD: 0, // 0 means disabled
+    MAX_TOKEN_AGE_MINUTES: 60,
+    // Entry Signal Conditions
+    MIN_IMPULSE_PERCENT: 80,
+    PULLBACK_MIN_PERCENT: 20,
+    PULLBACK_MAX_PERCENT: 45,
+    VWAP_RECLAIM_REQUIRED: true,
+    MIN_BUY_SELL_RATIO: 1.3,
+    MIN_UNIQUE_BUYERS: 5,
+    ENTRY_CONFIRMATION_WINDOW_SECONDS: 60,
+    MAX_PRICE_ABOVE_RECLAIM_PERCENT: 8,
+    // Execution constraints
+    MAX_SLIPPAGE_PERCENT: 5,
+    MAX_POSITION_PERCENT_OF_LIQUIDITY: 1,
+    // Risk and Position Sizing (can be overridden by env for testing)
+    POSITION_SIZE_USD: 50,
+    RISK_PER_TRADE_PERCENT: 0.5,
+    // Exit strategy
+    STOP_LOSS_PERCENT: 20,
+    TAKE_PROFIT_1_PERCENT: 25,
+    TAKE_PROFIT_1_SIZE_PERCENT: 50, // sell 50% of position at TP1
+    TAKE_PROFIT_2_PERCENT: 50,
+    TAKE_PROFIT_2_SIZE_PERCENT: 30, // sell 30% of position at TP2
+    RUNNER_SIZE_PERCENT: 20, // keep 20% for runner
+    TRAILING_STOP_PERCENT: 20,
+    TIME_STOP_MINUTES: 15,
+};
