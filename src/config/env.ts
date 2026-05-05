@@ -17,6 +17,9 @@ const envSchema = z.object({
   PAPER_TRADING: z.string().transform((val) => val === 'true').default('true'),
   LIVE_TRADING: z.string().transform((val) => val === 'true').default('false'),
 
+  ALLOW_MOCKED_DATA: z.string().transform((val) => val === 'true').default('false'),
+  ALLOW_PARTIAL_DATA: z.string().transform((val) => val === 'true').default('true'),
+
   POSITION_SIZE_USD: z.coerce.number().positive().default(50),
   MIN_LIQUIDITY_USD: z.coerce.number().positive().default(10000),
   MAX_SLIPPAGE_PERCENT: z.coerce.number().positive().default(5),

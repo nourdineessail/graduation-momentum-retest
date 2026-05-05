@@ -98,6 +98,34 @@ class Repositories {
             logger_1.logger.error('Failed to save paper trade', { err, tradeId: trade.tradeId });
         }
     }
+    static async savePaperTradeExit(tradeId, exitPrice, quantitySold, realizedPnl, exitReason, feesUsd, slippageUsd) {
+        try {
+            const { error } = await supabaseClient_1.supabase.from('paper_trade_exits').insert({
+                trade_id: tradeId,
+                exit_price: exitPrice,
+                token_quantity: quantitySold,
+                realized_pnl_usd: realizedPnl,
+                exit_reason: exitReason,
+                fees_usd: feesUsd,
+                slippage_usd: slippageUsd,
+            });
+            if (error)
+                throw error;
+        }
+        catch (err) {
+            logger_1.logger.error('Failed to save paper trade exit', { err, tradeId });
+        }
+    }
+    static async savePerformanceSnapshot(snapshot) {
+        try {
+            const { error } = await supabaseClient_1.supabase.from('performance_snapshots').insert(snapshot);
+            if (error)
+                throw error;
+        }
+        catch (err) {
+            logger_1.logger.error('Failed to save performance snapshot', { err });
+        }
+    }
     static async saveError(component, errorType, message, errObj) {
         try {
             const { error } = await supabaseClient_1.supabase.from('errors').insert({

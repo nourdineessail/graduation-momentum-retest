@@ -4,6 +4,7 @@ import { PnlCalculator } from './pnlCalculator';
 import { Repositories } from '../storage/repositories';
 import { logger } from '../logging/logger';
 import { LocalFileLogger } from '../logging/localFileLogger';
+import { ExecutionSimulator } from './executionSimulator';
 import { EventEmitter } from 'events';
 
 export interface ExitEvent {
@@ -85,31 +86,65 @@ export class PositionManager extends EventEmitter {
   }
 
   private triggerPartialExit(trade: PaperTrade, price: number, reason: string, sizePercent: number) {
-    const quantitySold = trade.tokenQuantity * (sizePercent / 100);
-    const realizedPnl = PnlCalculator.calculateRealized(trade.entryPrice, price, quantitySold);
+    const quantityToSell = trade.originalTokenQuantity * (sizePercent / 100);
+    // Ensure we don't sell more than we have (just in case of weird math)
+    const quantitySold = Math.min(quantityToSell, trade.tokenQuantity);
+
+    const positionValueUsd = quantitySold * price;
+    const sim = ExecutionSimulator.simulateMarketOrder('SELL', price, positionValueUsd, positionValueUsd * 10); // Mock large liquidity for exits
+
+    if (!sim.success) {
+      logger.warn(`Partial exit failed simulation: ${sim.reason}`);
+      return;
+    }
+
+    const executedPrice = sim.executedPrice;
+    trade.feesUsd += sim.feesUsd;
+    trade.slippageUsd += sim.slippageUsd;
+
+    const realizedPnl = PnlCalculator.calculateRealized(trade.entryPrice, executedPrice, quantitySold);
 
     trade.realizedPnlUsd += realizedPnl;
     trade.tokenQuantity -= quantitySold;
     trade.status = 'PARTIAL_EXIT';
     trade.exitReason = reason;
-    trade.averageExitPrice = price;
+    trade.averageExitPrice = executedPrice;
 
-    logger.info(`Partial exit [${reason}] for ${trade.tradeId} at $${price.toFixed(8)}`, {
+    logger.info(`Partial exit [${reason}] for ${trade.tradeId} at $${executedPrice.toFixed(8)}`, {
       quantitySold,
       realizedPnl,
+      fees: sim.feesUsd,
+      slippage: sim.slippageUsd,
     });
 
-    LocalFileLogger.log('INFO', 'PositionManager', reason, `Partial exit executed`, { price, quantitySold, realizedPnl }, { token: trade.tokenMint, pool: trade.poolAddress, tradeId: trade.tradeId });
+    LocalFileLogger.log('INFO', 'PositionManager', reason, `Partial exit executed`, { executedPrice, quantitySold, realizedPnl }, { token: trade.tokenMint, pool: trade.poolAddress, tradeId: trade.tradeId });
 
-    this.emit('partialExit', { trade, exitPrice: price, quantitySold, exitReason: reason, partial: true } as ExitEvent);
+    this.emit('partialExit', { trade, exitPrice: executedPrice, quantitySold, exitReason: reason, partial: true } as ExitEvent);
     Repositories.savePaperTrade(trade);
 
-    Repositories.saveError('PositionManager', 'TRADE_EXIT', `partial exit ${reason}`, { tradeId: trade.tradeId, reason, price });
+    Repositories.savePaperTradeExit(trade.tradeId, executedPrice, quantitySold, realizedPnl, reason, sim.feesUsd, sim.slippageUsd);
   }
 
   private triggerFullExit(trade: PaperTrade, price: number, reason: string) {
-    const realizedPnl = PnlCalculator.calculateRealized(trade.entryPrice, price, trade.tokenQuantity);
-    const entryValue = trade.entryPrice * (trade.positionSizeUsd / trade.entryPrice);
+    const quantitySold = trade.tokenQuantity;
+    const positionValueUsd = quantitySold * price;
+    const sim = ExecutionSimulator.simulateMarketOrder('SELL', price, positionValueUsd, positionValueUsd * 10);
+
+    let executedPrice = price;
+    let exitFees = 0;
+    let exitSlippage = 0;
+
+    if (sim.success) {
+      executedPrice = sim.executedPrice;
+      exitFees = sim.feesUsd;
+      exitSlippage = sim.slippageUsd;
+      trade.feesUsd += sim.feesUsd;
+      trade.slippageUsd += sim.slippageUsd;
+    } else {
+      logger.warn(`Full exit failed simulation (using rough price): ${sim.reason}`);
+    }
+
+    const realizedPnl = PnlCalculator.calculateRealized(trade.entryPrice, executedPrice, quantitySold);
 
     trade.realizedPnlUsd += realizedPnl;
     trade.realizedPnlPercent = (trade.realizedPnlUsd / trade.positionSizeUsd) * 100;
@@ -117,11 +152,11 @@ export class PositionManager extends EventEmitter {
     trade.status = 'CLOSED';
     trade.exitTimestamp = new Date();
     trade.exitReason = reason;
-    trade.averageExitPrice = price;
+    trade.averageExitPrice = executedPrice;
 
     this.openPositions.delete(trade.tradeId);
 
-    logger.info(`Full exit [${reason}] for ${trade.tradeId} at $${price.toFixed(8)} | PnL: $${trade.realizedPnlUsd.toFixed(2)}`, {
+    logger.info(`Full exit [${reason}] for ${trade.tradeId} at $${executedPrice.toFixed(8)} | PnL: $${trade.realizedPnlUsd.toFixed(2)}`, {
       tradeId: trade.tradeId,
     });
 
@@ -130,12 +165,13 @@ export class PositionManager extends EventEmitter {
       'PositionManager',
       reason,
       `Full exit executed`,
-      { price, pnl: trade.realizedPnlUsd },
+      { executedPrice, pnl: trade.realizedPnlUsd },
       { token: trade.tokenMint, pool: trade.poolAddress, tradeId: trade.tradeId }
     );
 
-    this.emit('fullExit', { trade, exitPrice: price, quantitySold: trade.tokenQuantity, exitReason: reason, partial: false } as ExitEvent);
+    this.emit('fullExit', { trade, exitPrice: executedPrice, quantitySold, exitReason: reason, partial: false } as ExitEvent);
     Repositories.savePaperTrade(trade);
+    Repositories.savePaperTradeExit(trade.tradeId, executedPrice, quantitySold, realizedPnl, reason, exitFees, exitSlippage);
   }
 
   public forceExit(tradeId: string, currentPrice: number, reason: string) {

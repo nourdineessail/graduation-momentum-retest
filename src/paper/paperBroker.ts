@@ -47,6 +47,7 @@ export class PaperBroker {
       entryPrice,
       positionSizeUsd,
       tokenQuantity: sim.quantity,
+      originalTokenQuantity: sim.quantity,
       realizedPnlUsd: 0,
       realizedPnlPercent: 0,
       unrealizedPnlUsd: 0,

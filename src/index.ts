@@ -7,6 +7,7 @@ import { GraduationMomentumRetest } from './strategy/graduationMomentumRetest';
 import { PaperBroker } from './paper/paperBroker';
 import { PositionManager } from './paper/positionManager';
 import { RiskManager } from './risk/riskManager';
+import { PerformanceTracker } from './risk/performanceTracker';
 import { TelegramNotifier } from './alerts/telegramNotifier';
 import { Repositories } from './storage/repositories';
 import { PoolInfo, Signal } from './core/types';
@@ -26,6 +27,7 @@ async function shutdown(signal: string) {
 
   poolWatcher.stop();
   marketDataService.stopPolling();
+  performanceTracker.stop();
 
   LocalFileLogger.shutdown();
   process.exit(0);
@@ -53,6 +55,7 @@ LocalFileLogger.init();
 const positionManager = new PositionManager();
 const paperBroker = new PaperBroker(positionManager);
 const riskManager = new RiskManager();
+const performanceTracker = new PerformanceTracker();
 const strategy = new GraduationMomentumRetest();
 const marketDataService = new MarketDataService();
 const poolWatcher = new RaydiumPoolWatcher();
@@ -70,10 +73,10 @@ poolWatcher.on('newPool', async (pool: PoolInfo) => {
 
 // ─── Market Data Events ──────────────────────────────────────────────────────
 marketDataService.on('update', (poolAddress: string, marketData: any) => {
-  lastMarketUpdateMs.set(poolAddress, Date.now());
+  lastMarketUpdateMs.set(poolAddress, marketData.timestamp);
 
   // Reject stale data
-  if (riskManager.isDataStale(lastMarketUpdateMs.get(poolAddress) || 0)) {
+  if (riskManager.isDataStale(marketData.timestamp)) {
     logger.warn(`Stale data for pool ${poolAddress}, skipping strategy eval`);
     return;
   }
@@ -102,6 +105,7 @@ strategy.on('signal', async (signal: Signal) => {
   if (!riskCheck.allowed) {
     logger.warn(`Risk manager blocked trade: ${riskCheck.reason}`, { signalId: signal.id });
     LocalFileLogger.log('WARN', 'RiskManager', 'ENTRY_BLOCKED', riskCheck.reason || 'Blocked', {}, { token: signal.tokenMint, pool: signal.poolAddress });
+    performanceTracker.recordRejectedSignal();
     return;
   }
 
@@ -113,6 +117,7 @@ strategy.on('signal', async (signal: Signal) => {
   const trade = await paperBroker.executeEntry(signal);
   if (trade) {
     riskManager.onTradeOpened(trade);
+    performanceTracker.recordTrade(trade);
     TelegramNotifier.tradeOpened(trade.tradeId, trade.tokenMint, trade.entryPrice, trade.positionSizeUsd);
   }
 });
@@ -132,6 +137,7 @@ strategy.on('emergencyExit', (pool: PoolInfo, reason: string) => {
 // ─── Position Exit Events ─────────────────────────────────────────────────────
 positionManager.on('fullExit', async (event: any) => {
   riskManager.onTradeClosed(event.trade);
+  performanceTracker.recordTrade(event.trade);
   strategy.notifyTradeClosed(event.trade.poolAddress);
   marketDataService.unwatchPool(event.trade.poolAddress);
 
@@ -148,6 +154,7 @@ positionManager.on('fullExit', async (event: any) => {
 });
 
 positionManager.on('partialExit', async (event: any) => {
+  performanceTracker.recordTrade(event.trade);
   const isTP1 = event.exitReason === 'TAKE_PROFIT_1';
   const isTP2 = event.exitReason === 'TAKE_PROFIT_2';
 
@@ -169,6 +176,7 @@ async function main() {
   await TelegramNotifier.botStarted();
 
   marketDataService.startPolling(2000);
+  performanceTracker.start();
   await poolWatcher.start();
 
   logger.info('✅ Bot is running. Listening for new Raydium pools...');

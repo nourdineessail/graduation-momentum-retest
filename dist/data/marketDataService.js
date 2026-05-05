@@ -62,7 +62,7 @@ class MarketDataService extends events_1.EventEmitter {
                 const quoteDecimals = pool.quoteMint.includes('EPj') ? 6 : 9; // USDC: 6, SOL: 9
                 const price = priceEngine_1.PriceEngine.calculatePrice(baseBalance, baseDecimals, quoteBalance, quoteDecimals, pool.quoteMint);
                 const liquidityUsd = priceEngine_1.PriceEngine.calculateLiquidityUsd(quoteBalance, quoteDecimals, pool.quoteMint);
-                this.updateMarketData(pool.poolAddress, price, liquidityUsd);
+                this.updateMarketData(pool.poolAddress, price, liquidityUsd, Number(quoteBalance));
             }
         }
         catch (error) {
@@ -72,7 +72,7 @@ class MarketDataService extends events_1.EventEmitter {
             this.isPolling = false;
         }
     }
-    updateMarketData(poolAddress, currentPrice, liquidityUsd) {
+    updateMarketData(poolAddress, currentPrice, liquidityUsd, currentQuoteBalance) {
         const history = this.poolHistory.get(poolAddress);
         if (!history)
             return;
@@ -80,12 +80,30 @@ class MarketDataService extends events_1.EventEmitter {
         let localLow = currentPrice;
         let vwap = currentPrice;
         let pullbackPercent = 0;
-        // We mock buy/sell ratio for simulation purposes because tracking exact swaps
-        // requires full indexer capabilities which is out of scope for a single node process.
-        const buySellRatio = 1.0 + (Math.random() * 0.5 - 0.1);
-        const uniqueBuyers = Math.floor(Math.random() * 20);
-        const uniqueSellers = Math.floor(Math.random() * 10);
+        let quoteVaultDeltaUsd = 0;
+        let netBuyPressure = 1.0;
+        let flowDirection = 'NEUTRAL';
         if (history.length > 0) {
+            const last = history[history.length - 1];
+            // We calculate net volume by tracking the difference in the quote token vault balance.
+            // An increase in Quote vault means net buys; decrease means net sells.
+            // To get delta USD, we approximate the difference in balance * current price.
+            // (This is a simplified estimation since PriceEngine handles decimals, we just use the ratio of liquidityUsd).
+            // Assuming liquidityUsd is proportional to quoteBalance.
+            const lastQuoteBalance = last._quoteBalance || currentQuoteBalance;
+            const quoteDeltaNative = currentQuoteBalance - lastQuoteBalance;
+            // Calculate delta in USD. If quoteBalance is 0, avoid div by zero.
+            if (currentQuoteBalance > 0) {
+                quoteVaultDeltaUsd = (quoteDeltaNative / currentQuoteBalance) * liquidityUsd;
+            }
+            if (quoteVaultDeltaUsd > 0) {
+                flowDirection = 'BUY';
+                netBuyPressure = 1.0 + (quoteVaultDeltaUsd / liquidityUsd) * 100; // Positive pressure scalar
+            }
+            else if (quoteVaultDeltaUsd < 0) {
+                flowDirection = 'SELL';
+                netBuyPressure = 1.0 / (1.0 + Math.abs(quoteVaultDeltaUsd / liquidityUsd) * 100); // Negative pressure scalar
+            }
             localHigh = Math.max(...history.map(h => h.price), currentPrice);
             localLow = Math.min(...history.map(h => h.price), currentPrice);
             if (localHigh > 0) {
@@ -96,16 +114,22 @@ class MarketDataService extends events_1.EventEmitter {
             vwap = sumPrice / (history.length + 1);
         }
         const newData = {
+            timestamp: Date.now(),
+            dataQuality: 'PARTIAL',
             price: currentPrice,
             liquidityUsd,
             localHigh,
             localLow,
             pullbackPercent,
             vwap,
-            buySellRatio,
-            uniqueBuyers,
-            uniqueSellers
+            quoteVaultDeltaUsd,
+            netBuyPressure,
+            flowDirection,
+            uniqueBuyers: null,
+            uniqueSellers: null,
         };
+        // Store raw balance temporarily for the next delta calculation
+        newData._quoteBalance = currentQuoteBalance;
         history.push(newData);
         // Keep history bounded
         if (history.length > 1000) {

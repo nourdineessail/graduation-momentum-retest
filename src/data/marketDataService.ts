@@ -72,7 +72,7 @@ export class MarketDataService extends EventEmitter {
         const price = PriceEngine.calculatePrice(baseBalance, baseDecimals, quoteBalance, quoteDecimals, pool.quoteMint);
         const liquidityUsd = PriceEngine.calculateLiquidityUsd(quoteBalance, quoteDecimals, pool.quoteMint);
 
-        this.updateMarketData(pool.poolAddress, price, liquidityUsd);
+        this.updateMarketData(pool.poolAddress, price, liquidityUsd, Number(quoteBalance));
       }
 
     } catch (error) {
@@ -82,7 +82,7 @@ export class MarketDataService extends EventEmitter {
     }
   }
 
-  private updateMarketData(poolAddress: string, currentPrice: number, liquidityUsd: number) {
+  private updateMarketData(poolAddress: string, currentPrice: number, liquidityUsd: number, currentQuoteBalance: number) {
     const history = this.poolHistory.get(poolAddress);
     if (!history) return;
 
@@ -91,13 +91,33 @@ export class MarketDataService extends EventEmitter {
     let vwap = currentPrice;
     let pullbackPercent = 0;
     
-    // We mock buy/sell ratio for simulation purposes because tracking exact swaps
-    // requires full indexer capabilities which is out of scope for a single node process.
-    const buySellRatio = 1.0 + (Math.random() * 0.5 - 0.1); 
-    const uniqueBuyers = Math.floor(Math.random() * 20);
-    const uniqueSellers = Math.floor(Math.random() * 10);
+    let quoteVaultDeltaUsd = 0;
+    let netBuyPressure = 1.0;
+    let flowDirection: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
 
     if (history.length > 0) {
+      const last = history[history.length - 1];
+      // We calculate net volume by tracking the difference in the quote token vault balance.
+      // An increase in Quote vault means net buys; decrease means net sells.
+      // To get delta USD, we approximate the difference in balance * current price.
+      // (This is a simplified estimation since PriceEngine handles decimals, we just use the ratio of liquidityUsd).
+      // Assuming liquidityUsd is proportional to quoteBalance.
+      const lastQuoteBalance = (last as any)._quoteBalance || currentQuoteBalance;
+      const quoteDeltaNative = currentQuoteBalance - lastQuoteBalance;
+      
+      // Calculate delta in USD. If quoteBalance is 0, avoid div by zero.
+      if (currentQuoteBalance > 0) {
+        quoteVaultDeltaUsd = (quoteDeltaNative / currentQuoteBalance) * liquidityUsd;
+      }
+      
+      if (quoteVaultDeltaUsd > 0) {
+        flowDirection = 'BUY';
+        netBuyPressure = 1.0 + (quoteVaultDeltaUsd / liquidityUsd) * 100; // Positive pressure scalar
+      } else if (quoteVaultDeltaUsd < 0) {
+        flowDirection = 'SELL';
+        netBuyPressure = 1.0 / (1.0 + Math.abs(quoteVaultDeltaUsd / liquidityUsd) * 100); // Negative pressure scalar
+      }
+
       localHigh = Math.max(...history.map(h => h.price), currentPrice);
       localLow = Math.min(...history.map(h => h.price), currentPrice);
       
@@ -111,16 +131,23 @@ export class MarketDataService extends EventEmitter {
     }
 
     const newData: MarketData = {
+      timestamp: Date.now(),
+      dataQuality: 'PARTIAL',
       price: currentPrice,
       liquidityUsd,
       localHigh,
       localLow,
       pullbackPercent,
       vwap,
-      buySellRatio,
-      uniqueBuyers,
-      uniqueSellers
+      quoteVaultDeltaUsd,
+      netBuyPressure,
+      flowDirection,
+      uniqueBuyers: null,
+      uniqueSellers: null,
     };
+
+    // Store raw balance temporarily for the next delta calculation
+    (newData as any)._quoteBalance = currentQuoteBalance;
 
     history.push(newData);
     

@@ -173,13 +173,17 @@ import { MarketData } from '../src/core/types';
 
 function makeMarketData(overrides: Partial<MarketData> = {}): MarketData {
   return {
+    timestamp: Date.now(),
+    dataQuality: 'REAL',
     price: 0.001,
     liquidityUsd: 25000,
     localHigh: 0.0018,
     localLow: 0.0005,
     pullbackPercent: 33,
     vwap: 0.0009,
-    buySellRatio: 1.8,
+    quoteVaultDeltaUsd: 5000,
+    netBuyPressure: 1.8,
+    flowDirection: 'BUY',
     uniqueBuyers: 12,
     uniqueSellers: 5,
     ...overrides,
@@ -233,8 +237,10 @@ describe('MomentumFilter', () => {
   });
 
   it('validates buy pressure', () => {
-    expect(MomentumFilter.checkBuyPressure(makeMarketData({ buySellRatio: 1.8, uniqueBuyers: 10 }))).toBe(true);
-    expect(MomentumFilter.checkBuyPressure(makeMarketData({ buySellRatio: 1.0, uniqueBuyers: 10 }))).toBe(false);
-    expect(MomentumFilter.checkBuyPressure(makeMarketData({ buySellRatio: 1.8, uniqueBuyers: 2 }))).toBe(false);
+    expect(MomentumFilter.checkBuyPressure(makeMarketData({ netBuyPressure: 1.8, uniqueBuyers: 10 }))).toBe(true);
+    expect(MomentumFilter.checkBuyPressure(makeMarketData({ netBuyPressure: 1.0, uniqueBuyers: 10 }))).toBe(false);
+    expect(MomentumFilter.checkBuyPressure(makeMarketData({ netBuyPressure: 1.8, uniqueBuyers: 2 }))).toBe(false);
+    // test PARTIAL bypass
+    expect(MomentumFilter.checkBuyPressure(makeMarketData({ dataQuality: 'PARTIAL', netBuyPressure: 1.5, uniqueBuyers: null }))).toBe(true);
   });
 });

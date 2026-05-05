@@ -18,6 +18,8 @@ const envSchema = zod_1.z.object({
     TELEGRAM_CHAT_ID: zod_1.z.string().optional(),
     PAPER_TRADING: zod_1.z.string().transform((val) => val === 'true').default('true'),
     LIVE_TRADING: zod_1.z.string().transform((val) => val === 'true').default('false'),
+    ALLOW_MOCKED_DATA: zod_1.z.string().transform((val) => val === 'true').default('false'),
+    ALLOW_PARTIAL_DATA: zod_1.z.string().transform((val) => val === 'true').default('true'),
     POSITION_SIZE_USD: zod_1.z.coerce.number().positive().default(50),
     MIN_LIQUIDITY_USD: zod_1.z.coerce.number().positive().default(10000),
     MAX_SLIPPAGE_PERCENT: zod_1.z.coerce.number().positive().default(5),

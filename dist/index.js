@@ -9,6 +9,7 @@ const graduationMomentumRetest_1 = require("./strategy/graduationMomentumRetest"
 const paperBroker_1 = require("./paper/paperBroker");
 const positionManager_1 = require("./paper/positionManager");
 const riskManager_1 = require("./risk/riskManager");
+const performanceTracker_1 = require("./risk/performanceTracker");
 const telegramNotifier_1 = require("./alerts/telegramNotifier");
 const repositories_1 = require("./storage/repositories");
 const time_1 = require("./utils/time");
@@ -24,6 +25,7 @@ async function shutdown(signal) {
     localFileLogger_1.LocalFileLogger.log('INFO', 'System', 'BOT_SHUTDOWN', `Shutdown signal: ${signal}`, {});
     poolWatcher.stop();
     marketDataService.stopPolling();
+    performanceTracker.stop();
     localFileLogger_1.LocalFileLogger.shutdown();
     process.exit(0);
 }
@@ -45,6 +47,7 @@ localFileLogger_1.LocalFileLogger.init();
 const positionManager = new positionManager_1.PositionManager();
 const paperBroker = new paperBroker_1.PaperBroker(positionManager);
 const riskManager = new riskManager_1.RiskManager();
+const performanceTracker = new performanceTracker_1.PerformanceTracker();
 const strategy = new graduationMomentumRetest_1.GraduationMomentumRetest();
 const marketDataService = new marketDataService_1.MarketDataService();
 const poolWatcher = new raydiumPoolWatcher_1.RaydiumPoolWatcher();
@@ -59,9 +62,9 @@ poolWatcher.on('newPool', async (pool) => {
 });
 // ─── Market Data Events ──────────────────────────────────────────────────────
 marketDataService.on('update', (poolAddress, marketData) => {
-    lastMarketUpdateMs.set(poolAddress, Date.now());
+    lastMarketUpdateMs.set(poolAddress, marketData.timestamp);
     // Reject stale data
-    if (riskManager.isDataStale(lastMarketUpdateMs.get(poolAddress) || 0)) {
+    if (riskManager.isDataStale(marketData.timestamp)) {
         logger_1.logger.warn(`Stale data for pool ${poolAddress}, skipping strategy eval`);
         return;
     }
@@ -86,6 +89,7 @@ strategy.on('signal', async (signal) => {
     if (!riskCheck.allowed) {
         logger_1.logger.warn(`Risk manager blocked trade: ${riskCheck.reason}`, { signalId: signal.id });
         localFileLogger_1.LocalFileLogger.log('WARN', 'RiskManager', 'ENTRY_BLOCKED', riskCheck.reason || 'Blocked', {}, { token: signal.tokenMint, pool: signal.poolAddress });
+        performanceTracker.recordRejectedSignal();
         return;
     }
     if (!env_1.env.PAPER_TRADING) {
@@ -95,6 +99,7 @@ strategy.on('signal', async (signal) => {
     const trade = await paperBroker.executeEntry(signal);
     if (trade) {
         riskManager.onTradeOpened(trade);
+        performanceTracker.recordTrade(trade);
         telegramNotifier_1.TelegramNotifier.tradeOpened(trade.tradeId, trade.tokenMint, trade.entryPrice, trade.positionSizeUsd);
     }
 });
@@ -112,6 +117,7 @@ strategy.on('emergencyExit', (pool, reason) => {
 // ─── Position Exit Events ─────────────────────────────────────────────────────
 positionManager.on('fullExit', async (event) => {
     riskManager.onTradeClosed(event.trade);
+    performanceTracker.recordTrade(event.trade);
     strategy.notifyTradeClosed(event.trade.poolAddress);
     marketDataService.unwatchPool(event.trade.poolAddress);
     const isTP = event.exitReason?.includes('TAKE_PROFIT');
@@ -125,6 +131,7 @@ positionManager.on('fullExit', async (event) => {
     });
 });
 positionManager.on('partialExit', async (event) => {
+    performanceTracker.recordTrade(event.trade);
     const isTP1 = event.exitReason === 'TAKE_PROFIT_1';
     const isTP2 = event.exitReason === 'TAKE_PROFIT_2';
     if (isTP1)
@@ -143,6 +150,7 @@ async function main() {
     localFileLogger_1.LocalFileLogger.log('INFO', 'System', 'BOT_STARTUP', 'Bot starting', { paperTrading: env_1.env.PAPER_TRADING });
     await telegramNotifier_1.TelegramNotifier.botStarted();
     marketDataService.startPolling(2000);
+    performanceTracker.start();
     await poolWatcher.start();
     logger_1.logger.info('✅ Bot is running. Listening for new Raydium pools...');
     localFileLogger_1.LocalFileLogger.log('INFO', 'System', 'BOT_RUNNING', 'Listening for pools', {});

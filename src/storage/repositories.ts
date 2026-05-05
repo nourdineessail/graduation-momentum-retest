@@ -49,7 +49,7 @@ export class Repositories {
         local_high: signal.localHigh,
         pullback_percent: signal.pullbackPercent,
         vwap: signal.vwap,
-        buy_sell_ratio: signal.buySellRatio,
+        net_buy_pressure: signal.netBuyPressure,
         unique_buyers: signal.uniqueBuyers,
         passed: signal.passed,
         rejection_reason: signal.rejectionReason,
@@ -91,6 +91,32 @@ export class Repositories {
       if (error) throw error;
     } catch (err) {
       logger.error('Failed to save paper trade', { err, tradeId: trade.tradeId });
+    }
+  }
+
+  static async savePaperTradeExit(tradeId: string, exitPrice: number, quantitySold: number, realizedPnl: number, exitReason: string, feesUsd: number, slippageUsd: number) {
+    try {
+      const { error } = await supabase.from('paper_trade_exits').insert({
+        trade_id: tradeId,
+        exit_price: exitPrice,
+        token_quantity: quantitySold,
+        realized_pnl_usd: realizedPnl,
+        exit_reason: exitReason,
+        fees_usd: feesUsd,
+        slippage_usd: slippageUsd,
+      });
+      if (error) throw error;
+    } catch (err) {
+      logger.error('Failed to save paper trade exit', { err, tradeId });
+    }
+  }
+
+  static async savePerformanceSnapshot(snapshot: any) {
+    try {
+      const { error } = await supabase.from('performance_snapshots').insert(snapshot);
+      if (error) throw error;
+    } catch (err) {
+      logger.error('Failed to save performance snapshot', { err });
     }
   }
 

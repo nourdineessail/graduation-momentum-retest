@@ -8,6 +8,7 @@ import { Repositories } from '../storage/repositories';
 import { logger } from '../logging/logger';
 import { generateId } from '../utils/ids';
 import { strategyConfig } from '../config/strategyConfig';
+import { env } from '../config/env';
 import { EventEmitter } from 'events';
 import { LocalFileLogger } from '../logging/localFileLogger';
 
@@ -52,6 +53,11 @@ export class GraduationMomentumRetest extends EventEmitter {
   }
 
   private evaluateState(pool: PoolInfo, marketData: MarketData, state: string) {
+    if (marketData.dataQuality === 'MOCKED' && !env.ALLOW_MOCKED_DATA) {
+      this.rejectPool(pool.poolAddress, 'MOCKED data rejected by env config');
+      return;
+    }
+    
     // Universal liquidity check - drop immediately if liquidity vanishes
     if (state !== 'DETECTED' && state !== 'FILTERING') {
       const liqCheck = LiquidityFilter.pass(marketData);
@@ -148,7 +154,7 @@ export class GraduationMomentumRetest extends EventEmitter {
       localHigh: marketData.localHigh,
       pullbackPercent: marketData.pullbackPercent,
       vwap: marketData.vwap,
-      buySellRatio: marketData.buySellRatio,
+      netBuyPressure: marketData.netBuyPressure,
       uniqueBuyers: marketData.uniqueBuyers,
       passed: true,
       timestamp: new Date()

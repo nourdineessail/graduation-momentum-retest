@@ -21,6 +21,11 @@ export const strategyConfig = {
   // Risk and Position Sizing (can be overridden by env for testing)
   POSITION_SIZE_USD: 50,
   RISK_PER_TRADE_PERCENT: 0.5,
+  MAX_DAILY_LOSS_USD: 100,
+  MAX_CONSECUTIVE_LOSSES: 4,
+  COOLDOWN_AFTER_LOSSES_MINUTES: 30,
+  PER_TOKEN_COOLDOWN_MINUTES: 60,
+  STALE_DATA_MAX_SECONDS: 20,
 
   // Exit strategy
   STOP_LOSS_PERCENT: 20,

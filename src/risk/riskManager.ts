@@ -2,16 +2,8 @@ import { PaperTrade } from '../core/types';
 import { logger } from '../logging/logger';
 import { LocalFileLogger } from '../logging/localFileLogger';
 
-// All thresholds configurable here
-const RISK_CONFIG = {
-  MAX_OPEN_POSITIONS: 3,
-  MAX_TRADES_PER_HOUR: 10,
-  MAX_DAILY_LOSS_USD: 100,
-  MAX_CONSECUTIVE_LOSSES: 4,
-  COOLDOWN_AFTER_LOSSES_MINUTES: 30,
-  PER_TOKEN_COOLDOWN_MINUTES: 60,
-  STALE_DATA_MAX_SECONDS: 20,
-};
+import { env } from '../config/env';
+import { strategyConfig } from '../config/strategyConfig';
 
 export class RiskManager {
   private openPositions: Map<string, PaperTrade> = new Map();
@@ -36,13 +28,13 @@ export class RiskManager {
 
     if (trade.realizedPnlUsd < 0) {
       this.consecutiveLosses++;
-      if (this.consecutiveLosses >= RISK_CONFIG.MAX_CONSECUTIVE_LOSSES) {
-        this.cooldownUntil = Date.now() + RISK_CONFIG.COOLDOWN_AFTER_LOSSES_MINUTES * 60 * 1000;
+      if (this.consecutiveLosses >= strategyConfig.MAX_CONSECUTIVE_LOSSES) {
+        this.cooldownUntil = Date.now() + strategyConfig.COOLDOWN_AFTER_LOSSES_MINUTES * 60 * 1000;
         logger.warn(`RiskManager: Cooldown activated after ${this.consecutiveLosses} consecutive losses until ${new Date(this.cooldownUntil).toISOString()}`);
         LocalFileLogger.log('WARN', 'RiskManager', 'COOLDOWN_ACTIVE', `Cooldown after ${this.consecutiveLosses} losses`, { cooldownUntil: this.cooldownUntil });
       }
       // Per-token cooldown
-      this.tokenCooldowns.set(trade.tokenMint, Date.now() + RISK_CONFIG.PER_TOKEN_COOLDOWN_MINUTES * 60 * 1000);
+      this.tokenCooldowns.set(trade.tokenMint, Date.now() + strategyConfig.PER_TOKEN_COOLDOWN_MINUTES * 60 * 1000);
     } else {
       this.consecutiveLosses = 0;
     }
@@ -57,7 +49,7 @@ export class RiskManager {
 
     // Daily loss limit
     this.dailyPnlReset();
-    if (this.dailyRealizedPnl <= -RISK_CONFIG.MAX_DAILY_LOSS_USD) {
+    if (this.dailyRealizedPnl <= -strategyConfig.MAX_DAILY_LOSS_USD) {
       return { allowed: false, reason: `Daily loss limit hit: $${this.dailyRealizedPnl.toFixed(2)}` };
     }
 
@@ -69,15 +61,15 @@ export class RiskManager {
     }
 
     // Max open positions
-    if (this.openPositions.size >= RISK_CONFIG.MAX_OPEN_POSITIONS) {
-      return { allowed: false, reason: `Max open positions (${RISK_CONFIG.MAX_OPEN_POSITIONS}) reached` };
+    if (this.openPositions.size >= env.MAX_OPEN_POSITIONS) {
+      return { allowed: false, reason: `Max open positions (${env.MAX_OPEN_POSITIONS}) reached` };
     }
 
     // Max trades per hour
     const oneHourAgo = Date.now() - 3600 * 1000;
     const recentTrades = this.tradeTimestamps.filter(ts => ts > oneHourAgo);
-    if (recentTrades.length >= RISK_CONFIG.MAX_TRADES_PER_HOUR) {
-      return { allowed: false, reason: `Max trades per hour (${RISK_CONFIG.MAX_TRADES_PER_HOUR}) reached` };
+    if (recentTrades.length >= env.MAX_TRADES_PER_HOUR) {
+      return { allowed: false, reason: `Max trades per hour (${env.MAX_TRADES_PER_HOUR}) reached` };
     }
 
     // Per-token cooldown
@@ -91,7 +83,7 @@ export class RiskManager {
 
   public isDataStale(lastUpdateMs: number): boolean {
     const ageSec = (Date.now() - lastUpdateMs) / 1000;
-    return ageSec > RISK_CONFIG.STALE_DATA_MAX_SECONDS;
+    return ageSec > strategyConfig.STALE_DATA_MAX_SECONDS;
   }
 
   private dailyPnlReset() {

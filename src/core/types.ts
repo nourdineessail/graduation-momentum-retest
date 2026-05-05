@@ -20,15 +20,19 @@ export interface PoolInfo {
 }
 
 export interface MarketData {
+  timestamp: number;
+  dataQuality: 'REAL' | 'PARTIAL' | 'MOCKED' | 'UNKNOWN';
   price: number;
   liquidityUsd: number;
   localHigh: number;
   localLow: number;
   pullbackPercent: number;
   vwap: number;
-  buySellRatio: number;
-  uniqueBuyers: number;
-  uniqueSellers: number;
+  quoteVaultDeltaUsd: number;
+  netBuyPressure: number;
+  flowDirection: 'BUY' | 'SELL' | 'NEUTRAL';
+  uniqueBuyers: number | null;
+  uniqueSellers: number | null;
 }
 
 export interface Signal {
@@ -42,8 +46,8 @@ export interface Signal {
   localHigh: number;
   pullbackPercent: number;
   vwap: number;
-  buySellRatio: number;
-  uniqueBuyers: number;
+  netBuyPressure: number;
+  uniqueBuyers: number | null;
   passed: boolean;
   rejectionReason?: string;
   timestamp: Date;
@@ -64,6 +68,7 @@ export interface PaperTrade {
   averageExitPrice?: number;
   positionSizeUsd: number;
   tokenQuantity: number;
+  originalTokenQuantity: number;
   realizedPnlUsd: number;
   realizedPnlPercent: number;
   unrealizedPnlUsd: number;

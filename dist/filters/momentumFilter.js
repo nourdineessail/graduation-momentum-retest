@@ -23,8 +23,14 @@ class MomentumFilter {
         return marketData.price >= marketData.vwap && marketData.price <= maxAllowedPrice;
     }
     static checkBuyPressure(marketData) {
-        return (marketData.buySellRatio >= strategyConfig_1.strategyConfig.MIN_BUY_SELL_RATIO &&
-            marketData.uniqueBuyers >= strategyConfig_1.strategyConfig.MIN_UNIQUE_BUYERS);
+        const buyPressurePasses = marketData.netBuyPressure >= strategyConfig_1.strategyConfig.MIN_BUY_SELL_RATIO;
+        if (marketData.dataQuality === 'PARTIAL' || marketData.dataQuality === 'MOCKED') {
+            // Bypass unique buyers check if we don't have perfect wallet tracking
+            // Instead, we require slightly stronger net flow confirmation (e.g. 1.1x the config)
+            return marketData.netBuyPressure >= (strategyConfig_1.strategyConfig.MIN_BUY_SELL_RATIO * 1.1);
+        }
+        return (buyPressurePasses &&
+            (marketData.uniqueBuyers ?? 0) >= strategyConfig_1.strategyConfig.MIN_UNIQUE_BUYERS);
     }
 }
 exports.MomentumFilter = MomentumFilter;

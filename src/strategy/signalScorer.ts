@@ -12,11 +12,11 @@ export class SignalScorer {
     score += liquidityBonus;
 
     // Add up to 15 points for strong buy pressure
-    const buyPressureBonus = Math.min(15, (marketData.buySellRatio - 1.0) * 10);
+    const buyPressureBonus = Math.min(15, (marketData.netBuyPressure - 1.0) * 10);
     if (buyPressureBonus > 0) score += buyPressureBonus;
 
     // Add up to 15 points for unique buyers
-    const uniqueBuyersBonus = Math.min(15, marketData.uniqueBuyers);
+    const uniqueBuyersBonus = Math.min(15, marketData.uniqueBuyers ?? 0);
     score += uniqueBuyersBonus;
 
     return Math.min(100, Math.round(score));

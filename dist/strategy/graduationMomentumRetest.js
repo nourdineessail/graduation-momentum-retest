@@ -10,6 +10,7 @@ const repositories_1 = require("../storage/repositories");
 const logger_1 = require("../logging/logger");
 const ids_1 = require("../utils/ids");
 const strategyConfig_1 = require("../config/strategyConfig");
+const env_1 = require("../config/env");
 const events_1 = require("events");
 const localFileLogger_1 = require("../logging/localFileLogger");
 class GraduationMomentumRetest extends events_1.EventEmitter {
@@ -47,6 +48,10 @@ class GraduationMomentumRetest extends events_1.EventEmitter {
         }
     }
     evaluateState(pool, marketData, state) {
+        if (marketData.dataQuality === 'MOCKED' && !env_1.env.ALLOW_MOCKED_DATA) {
+            this.rejectPool(pool.poolAddress, 'MOCKED data rejected by env config');
+            return;
+        }
         // Universal liquidity check - drop immediately if liquidity vanishes
         if (state !== 'DETECTED' && state !== 'FILTERING') {
             const liqCheck = liquidityFilter_1.LiquidityFilter.pass(marketData);
@@ -137,7 +142,7 @@ class GraduationMomentumRetest extends events_1.EventEmitter {
             localHigh: marketData.localHigh,
             pullbackPercent: marketData.pullbackPercent,
             vwap: marketData.vwap,
-            buySellRatio: marketData.buySellRatio,
+            netBuyPressure: marketData.netBuyPressure,
             uniqueBuyers: marketData.uniqueBuyers,
             passed: true,
             timestamp: new Date()
