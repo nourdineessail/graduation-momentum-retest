@@ -241,11 +241,16 @@ export class RaydiumPoolWatcher extends EventEmitter {
         const tokenMint = allAccounts[accountIndexes[3]];
         const quoteMint = allAccounts[accountIndexes[4]];
         
+        // FIXME: Pump.fun uses bonding curves, not standard SPL token vaults.
+        // We cannot blindly pass tokenMint as baseVault. MarketDataService will fail to decode balances.
+        // Temporarily skipping Pump.fun pool creation until bonding curve parsing is supported.
+        /*
         if (quoteMint === wsolStr || quoteMint === usdcStr) {
           addCandidate(pool, tokenMint, tokenMint, quoteMint);
         } else if (tokenMint === wsolStr || tokenMint === usdcStr) {
           addCandidate(pool, quoteMint, quoteMint, tokenMint);
         }
+        */
       }
     };
 

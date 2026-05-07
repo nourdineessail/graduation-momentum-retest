@@ -36,6 +36,10 @@ CREATE TABLE strategy_signals (
   local_high NUMERIC,
   pullback_percent NUMERIC,
   vwap NUMERIC,
+  data_quality VARCHAR(20),
+  quote_vault_delta_usd NUMERIC,
+  flow_direction VARCHAR(20),
+  net_buy_pressure NUMERIC,
   buy_sell_ratio NUMERIC,
   unique_buyers INTEGER,
   unique_sellers INTEGER,
@@ -59,6 +63,7 @@ CREATE TABLE paper_trades (
   average_exit_price NUMERIC,
   position_size_usd NUMERIC NOT NULL,
   token_quantity NUMERIC NOT NULL,
+  original_token_quantity NUMERIC NOT NULL DEFAULT 0,
   realized_pnl_usd NUMERIC NOT NULL DEFAULT 0,
   realized_pnl_percent NUMERIC NOT NULL DEFAULT 0,
   unrealized_pnl_usd NUMERIC NOT NULL DEFAULT 0,
@@ -124,3 +129,6 @@ CREATE INDEX idx_bot_events_token_mint ON bot_events(token_mint);
 CREATE INDEX idx_strategy_signals_token_mint ON strategy_signals(token_mint);
 CREATE INDEX idx_paper_trades_token_mint ON paper_trades(token_mint);
 CREATE INDEX idx_paper_trades_status ON paper_trades(status);
+CREATE INDEX idx_strategy_signals_data_quality ON strategy_signals(data_quality);
+CREATE INDEX idx_strategy_signals_pool_address ON strategy_signals(pool_address);
+CREATE INDEX idx_paper_trade_exits_trade_id ON paper_trade_exits(trade_id);

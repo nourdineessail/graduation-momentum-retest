@@ -1,9 +1,38 @@
 import { USDC_MINT, WSOL_MINT } from '../core/constants';
 
+import { logger } from '../logging/logger';
+
 export class PriceEngine {
-  // Hardcoded SOL price for simulation purposes since we are isolated from a price oracle here.
-  // In a real bot, we would fetch SOL/USDC price from Jupiter or Pyth.
+  // Live SOL price fetched from Jupiter. Defaults to 150 until first fetch.
   public static MOCK_SOL_PRICE = 150.0;
+  private static pollInterval: NodeJS.Timeout | null = null;
+
+  static async fetchSolPrice() {
+    try {
+      const response = await fetch('https://price.jup.ag/v6/price?ids=SOL');
+      if (response.ok) {
+        const json = await response.json();
+        if (json.data && json.data.SOL && json.data.SOL.price) {
+          this.MOCK_SOL_PRICE = json.data.SOL.price;
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to fetch SOL price from Jupiter', { err });
+    }
+  }
+
+  static startPricePolling() {
+    if (this.pollInterval) return;
+    this.fetchSolPrice(); // fetch immediately
+    this.pollInterval = setInterval(() => this.fetchSolPrice(), 60000); // every minute
+  }
+
+  static stopPricePolling() {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+  }
 
   static calculatePrice(
     baseVaultBalance: bigint,

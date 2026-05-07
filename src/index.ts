@@ -10,10 +10,12 @@ import { RiskManager } from './risk/riskManager';
 import { PerformanceTracker } from './risk/performanceTracker';
 import { TelegramNotifier } from './alerts/telegramNotifier';
 import { Repositories } from './storage/repositories';
-import { PoolInfo, Signal } from './core/types';
+import { PoolInfo, Signal, MarketData } from './core/types';
 import { minutesSince } from './utils/time';
 import { strategyConfig } from './config/strategyConfig';
 import { env } from './config/env';
+
+import { PriceEngine } from './data/priceEngine';
 
 // ─── Graceful Shutdown ───────────────────────────────────────────────────────
 let isShuttingDown = false;
@@ -28,6 +30,7 @@ async function shutdown(signal: string) {
   poolWatcher.stop();
   marketDataService.stopPolling();
   performanceTracker.stop();
+  PriceEngine.stopPricePolling();
 
   LocalFileLogger.shutdown();
   process.exit(0);
@@ -51,6 +54,7 @@ process.on('uncaughtException', (err) => {
 
 // ─── Core Instances ──────────────────────────────────────────────────────────
 LocalFileLogger.init();
+PriceEngine.startPricePolling();
 
 const positionManager = new PositionManager();
 const paperBroker = new PaperBroker(positionManager);
@@ -60,8 +64,8 @@ const strategy = new GraduationMomentumRetest();
 const marketDataService = new MarketDataService();
 const poolWatcher = new RaydiumPoolWatcher();
 
-// Track last market data timestamp per pool for stale detection
-const lastMarketUpdateMs: Map<string, number> = new Map();
+// Track last market data per pool for stale detection and emergency exits
+const lastMarketData: Map<string, MarketData> = new Map();
 
 // ─── Pool Watcher Events ─────────────────────────────────────────────────────
 poolWatcher.on('newPool', async (pool: PoolInfo) => {
@@ -72,8 +76,8 @@ poolWatcher.on('newPool', async (pool: PoolInfo) => {
 });
 
 // ─── Market Data Events ──────────────────────────────────────────────────────
-marketDataService.on('update', (poolAddress: string, marketData: any) => {
-  lastMarketUpdateMs.set(poolAddress, marketData.timestamp);
+marketDataService.on('update', (poolAddress: string, marketData: MarketData) => {
+  lastMarketData.set(poolAddress, marketData);
 
   // Reject stale data
   if (riskManager.isDataStale(marketData.timestamp)) {
@@ -126,10 +130,12 @@ strategy.on('signal', async (signal: Signal) => {
 strategy.on('emergencyExit', (pool: PoolInfo, reason: string) => {
   for (const position of positionManager.getOpenPositions()) {
     if (position.poolAddress === pool.poolAddress) {
-      const lastData = lastMarketUpdateMs.get(pool.poolAddress);
+      const lastData = lastMarketData.get(pool.poolAddress);
       logger.warn(`Emergency exit [${reason}] triggered for ${position.tradeId}`);
-      // Use last known price approximation — this is the best we can do without market depth
-      positionManager.forceExit(position.tradeId, position.entryPrice * 0.85, `EMERGENCY_${reason}`);
+      // Use last known price and liquidity approximation
+      const exitPrice = lastData ? lastData.price : position.entryPrice * 0.85;
+      const liquidityUsd = lastData ? lastData.liquidityUsd : 0;
+      positionManager.forceExit(position.tradeId, exitPrice, `EMERGENCY_${reason}`, liquidityUsd);
     }
   }
 });

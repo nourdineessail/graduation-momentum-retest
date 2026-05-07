@@ -30,6 +30,12 @@ const envSchema = z.object({
   MAX_OPEN_POSITIONS: z.coerce.number().int().positive().default(3),
   MAX_TRADES_PER_HOUR: z.coerce.number().int().positive().default(10),
 
+  MAX_DAILY_LOSS_USD: z.coerce.number().positive().default(100),
+  MAX_CONSECUTIVE_LOSSES: z.coerce.number().int().positive().default(4),
+  COOLDOWN_AFTER_LOSSES_MINUTES: z.coerce.number().positive().default(30),
+  PER_TOKEN_COOLDOWN_MINUTES: z.coerce.number().positive().default(60),
+  STALE_DATA_MAX_SECONDS: z.coerce.number().positive().default(20),
+
   LOCAL_LOG_PATH: z.string().default('./logs/bot.log'),
 });
 
