@@ -3,30 +3,60 @@ import { USDC_MINT, WSOL_MINT } from '../core/constants';
 import { logger } from '../logging/logger';
 
 export class PriceEngine {
-  // Live SOL price fetched from Jupiter. Defaults to 150 until first fetch.
+  // Live SOL price fetched from Binance public API. Defaults to 150 until first fetch.
   public static MOCK_SOL_PRICE = 150.0;
   private static pollInterval: NodeJS.Timeout | null = null;
   private static consecutiveFailures = 0;
 
+  /**
+   * Fetches live SOL/USDC price.
+   * Primary: Binance public REST API (free, no key required).
+   * Fallback: CoinGecko free tier (no key required).
+   */
   static async fetchSolPrice() {
+    // --- Primary: Binance ---
     try {
-      const response = await fetch('https://price.jup.ag/v6/price?ids=SOL');
+      const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDC', {
+        signal: AbortSignal.timeout(5000),
+      });
       if (response.ok) {
         const json = await response.json();
-        if (json.data && json.data.SOL && json.data.SOL.price) {
-          this.MOCK_SOL_PRICE = json.data.SOL.price;
-          this.consecutiveFailures = 0; // Reset on success
+        const price = parseFloat(json.price);
+        if (price > 0) {
+          this.MOCK_SOL_PRICE = price;
+          this.consecutiveFailures = 0;
+          logger.debug(`SOL price updated from Binance: $${price.toFixed(2)}`);
+          return;
         }
-      } else {
-        throw new Error(`HTTP ${response.status}`);
       }
-    } catch (err) {
-      this.consecutiveFailures++;
-      if (this.consecutiveFailures >= 3) {
-        logger.error(`Failed to fetch SOL price from Jupiter ${this.consecutiveFailures} times consecutively!`, { err });
-      } else {
-        logger.warn(`Failed to fetch SOL price from Jupiter (Attempt ${this.consecutiveFailures}/3)`, { err });
+    } catch (_binanceErr) {
+      // Binance failed — try fallback
+    }
+
+    // --- Fallback: CoinGecko ---
+    try {
+      const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (response.ok) {
+        const json = await response.json();
+        const price = json?.solana?.usd;
+        if (price && price > 0) {
+          this.MOCK_SOL_PRICE = price;
+          this.consecutiveFailures = 0;
+          logger.debug(`SOL price updated from CoinGecko: $${price.toFixed(2)}`);
+          return;
+        }
       }
+    } catch (_geckoErr) {
+      // Both failed
+    }
+
+    this.consecutiveFailures++;
+    if (this.consecutiveFailures >= 3) {
+      logger.error(`SOL price fetch failed ${this.consecutiveFailures}x consecutively. Using last known: $${this.MOCK_SOL_PRICE.toFixed(2)}`);
+    } else {
+      logger.warn(`SOL price fetch failed (attempt ${this.consecutiveFailures}). Using last known: $${this.MOCK_SOL_PRICE.toFixed(2)}`);
     }
   }
 

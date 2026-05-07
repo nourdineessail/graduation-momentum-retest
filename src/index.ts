@@ -71,7 +71,7 @@ const lastMarketData: Map<string, MarketData> = new Map();
 poolWatcher.on('newPool', async (pool: PoolInfo) => {
   LocalFileLogger.log('INFO', 'Main', 'POOL_DETECTED', `Pool: ${pool.poolAddress}`, pool, { token: pool.tokenMint, pool: pool.poolAddress });
   TelegramNotifier.poolDetected(pool.tokenMint, pool.poolAddress);
-  marketDataService.watchPool(pool);
+  await marketDataService.watchPool(pool);
   await strategy.onPoolDetected(pool);
 });
 
