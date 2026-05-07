@@ -46,6 +46,9 @@ export interface Signal {
   localHigh: number;
   pullbackPercent: number;
   vwap: number;
+  dataQuality: 'REAL' | 'PARTIAL' | 'MOCKED' | 'UNKNOWN';
+  quoteVaultDeltaUsd: number;
+  flowDirection: 'BUY' | 'SELL' | 'NEUTRAL';
   netBuyPressure: number;
   uniqueBuyers: number | null;
   passed: boolean;

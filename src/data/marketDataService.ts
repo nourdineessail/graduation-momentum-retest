@@ -72,7 +72,7 @@ export class MarketDataService extends EventEmitter {
         const price = PriceEngine.calculatePrice(baseBalance, baseDecimals, quoteBalance, quoteDecimals, pool.quoteMint);
         const liquidityUsd = PriceEngine.calculateLiquidityUsd(quoteBalance, quoteDecimals, pool.quoteMint);
 
-        this.updateMarketData(pool.poolAddress, price, liquidityUsd, Number(quoteBalance));
+        this.updateMarketData(pool.poolAddress, price, liquidityUsd, Number(quoteBalance), pool.quoteMint, quoteDecimals);
       }
 
     } catch (error) {
@@ -82,7 +82,7 @@ export class MarketDataService extends EventEmitter {
     }
   }
 
-  private updateMarketData(poolAddress: string, currentPrice: number, liquidityUsd: number, currentQuoteBalance: number) {
+  private updateMarketData(poolAddress: string, currentPrice: number, liquidityUsd: number, currentQuoteBalance: number, quoteMint: string, quoteDecimals: number) {
     const history = this.poolHistory.get(poolAddress);
     if (!history) return;
 
@@ -103,11 +103,13 @@ export class MarketDataService extends EventEmitter {
       // (This is a simplified estimation since PriceEngine handles decimals, we just use the ratio of liquidityUsd).
       // Assuming liquidityUsd is proportional to quoteBalance.
       const lastQuoteBalance = (last as any)._quoteBalance || currentQuoteBalance;
-      const quoteDeltaNative = currentQuoteBalance - lastQuoteBalance;
-      
-      // Calculate delta in USD. If quoteBalance is 0, avoid div by zero.
-      if (currentQuoteBalance > 0) {
-        quoteVaultDeltaUsd = (quoteDeltaNative / currentQuoteBalance) * liquidityUsd;
+      const quoteDeltaRaw = currentQuoteBalance - lastQuoteBalance;
+      const quoteDeltaUi = quoteDeltaRaw / Math.pow(10, quoteDecimals);
+
+      if (quoteMint.includes('So111') || quoteMint.includes('WSOL')) {
+        quoteVaultDeltaUsd = quoteDeltaUi * PriceEngine.MOCK_SOL_PRICE;
+      } else {
+        quoteVaultDeltaUsd = quoteDeltaUi; // Assume USDC or 1:1 stable
       }
       
       if (quoteVaultDeltaUsd > 0) {

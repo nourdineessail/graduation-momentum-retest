@@ -92,7 +92,7 @@ marketDataService.on('update', (poolAddress: string, marketData: any) => {
   // Update open positions with current price
   for (const position of positionManager.getOpenPositions()) {
     if (position.poolAddress === poolAddress) {
-      positionManager.updatePosition(position.tradeId, marketData.price);
+      positionManager.updatePosition(position.tradeId, marketData.price, marketData.liquidityUsd);
     }
   }
 

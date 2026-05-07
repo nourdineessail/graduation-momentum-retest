@@ -3,7 +3,7 @@ import { USDC_MINT, WSOL_MINT } from '../core/constants';
 export class PriceEngine {
   // Hardcoded SOL price for simulation purposes since we are isolated from a price oracle here.
   // In a real bot, we would fetch SOL/USDC price from Jupiter or Pyth.
-  private static MOCK_SOL_PRICE = 150.0;
+  public static MOCK_SOL_PRICE = 150.0;
 
   static calculatePrice(
     baseVaultBalance: bigint,

@@ -26,7 +26,12 @@ export class GraduationMomentumRetest extends EventEmitter {
     this.stateMachine.initializePool(pool);
     
     // Asynchronous safety check
-    const safety = await TokenSafetyFilter.checkSafety(pool.tokenMint);
+    const safety = await TokenSafetyFilter.checkSafety({
+      tokenMint: pool.tokenMint,
+      poolAddress: pool.poolAddress,
+      baseVault: pool.baseVault,
+      quoteVault: pool.quoteVault
+    });
     if (!safety.passed) {
       this.rejectPool(pool.poolAddress, `Safety check failed: ${safety.reason}`);
       return;
@@ -55,6 +60,14 @@ export class GraduationMomentumRetest extends EventEmitter {
   private evaluateState(pool: PoolInfo, marketData: MarketData, state: string) {
     if (marketData.dataQuality === 'MOCKED' && !env.ALLOW_MOCKED_DATA) {
       this.rejectPool(pool.poolAddress, 'MOCKED data rejected by env config');
+      return;
+    }
+    if (marketData.dataQuality === 'PARTIAL' && !env.ALLOW_PARTIAL_DATA) {
+      this.rejectPool(pool.poolAddress, 'PARTIAL data rejected by env config');
+      return;
+    }
+    if (marketData.dataQuality === 'UNKNOWN') {
+      this.rejectPool(pool.poolAddress, 'UNKNOWN data quality rejected');
       return;
     }
     
@@ -154,6 +167,9 @@ export class GraduationMomentumRetest extends EventEmitter {
       localHigh: marketData.localHigh,
       pullbackPercent: marketData.pullbackPercent,
       vwap: marketData.vwap,
+      dataQuality: marketData.dataQuality,
+      quoteVaultDeltaUsd: marketData.quoteVaultDeltaUsd,
+      flowDirection: marketData.flowDirection,
       netBuyPressure: marketData.netBuyPressure,
       uniqueBuyers: marketData.uniqueBuyers,
       passed: true,

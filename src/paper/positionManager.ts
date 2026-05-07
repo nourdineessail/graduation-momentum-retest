@@ -31,7 +31,7 @@ export class PositionManager extends EventEmitter {
     return this.openPositions.get(tradeId);
   }
 
-  public updatePosition(tradeId: string, currentPrice: number) {
+  public updatePosition(tradeId: string, currentPrice: number, liquidityUsd: number) {
     const trade = this.openPositions.get(tradeId);
     if (!trade) return;
 
@@ -48,32 +48,32 @@ export class PositionManager extends EventEmitter {
       trade.trailingStopPrice = newTrailingStop;
     }
 
-    this.checkExitConditions(trade, currentPrice);
+    this.checkExitConditions(trade, currentPrice, liquidityUsd);
     Repositories.savePaperTrade(trade);
   }
 
-  private checkExitConditions(trade: PaperTrade, currentPrice: number) {
+  private checkExitConditions(trade: PaperTrade, currentPrice: number, liquidityUsd: number) {
     // Stop Loss
     if (currentPrice <= trade.stopLossPrice) {
-      this.triggerFullExit(trade, currentPrice, 'STOP_LOSS');
+      this.triggerFullExit(trade, currentPrice, 'STOP_LOSS', liquidityUsd);
       return;
     }
 
     // Trailing Stop (only after TP1 hit, so partial position)
     if (trade.status === 'PARTIAL_EXIT' && currentPrice <= trade.trailingStopPrice) {
-      this.triggerFullExit(trade, currentPrice, 'TRAILING_STOP');
+      this.triggerFullExit(trade, currentPrice, 'TRAILING_STOP', liquidityUsd);
       return;
     }
 
     // Take Profit 1
     if (trade.status === 'OPEN' && currentPrice >= trade.takeProfit1Price) {
-      this.triggerPartialExit(trade, currentPrice, 'TAKE_PROFIT_1', strategyConfig.TAKE_PROFIT_1_SIZE_PERCENT);
+      this.triggerPartialExit(trade, currentPrice, 'TAKE_PROFIT_1', strategyConfig.TAKE_PROFIT_1_SIZE_PERCENT, liquidityUsd);
       return;
     }
 
     // Take Profit 2
     if (trade.status === 'PARTIAL_EXIT' && currentPrice >= trade.takeProfit2Price) {
-      this.triggerPartialExit(trade, currentPrice, 'TAKE_PROFIT_2', strategyConfig.TAKE_PROFIT_2_SIZE_PERCENT);
+      this.triggerPartialExit(trade, currentPrice, 'TAKE_PROFIT_2', strategyConfig.TAKE_PROFIT_2_SIZE_PERCENT, liquidityUsd);
       return;
     }
 
@@ -81,17 +81,17 @@ export class PositionManager extends EventEmitter {
     const durationMs = Date.now() - trade.entryTimestamp.getTime();
     const durationMinutes = durationMs / 60000;
     if (durationMinutes >= strategyConfig.TIME_STOP_MINUTES) {
-      this.triggerFullExit(trade, currentPrice, 'TIME_STOP');
+      this.triggerFullExit(trade, currentPrice, 'TIME_STOP', liquidityUsd);
     }
   }
 
-  private triggerPartialExit(trade: PaperTrade, price: number, reason: string, sizePercent: number) {
+  private triggerPartialExit(trade: PaperTrade, price: number, reason: string, sizePercent: number, liquidityUsd: number) {
     const quantityToSell = trade.originalTokenQuantity * (sizePercent / 100);
     // Ensure we don't sell more than we have (just in case of weird math)
     const quantitySold = Math.min(quantityToSell, trade.tokenQuantity);
 
     const positionValueUsd = quantitySold * price;
-    const sim = ExecutionSimulator.simulateMarketOrder('SELL', price, positionValueUsd, positionValueUsd * 10); // Mock large liquidity for exits
+    const sim = ExecutionSimulator.simulateMarketOrder('SELL', price, positionValueUsd, liquidityUsd);
 
     if (!sim.success) {
       logger.warn(`Partial exit failed simulation: ${sim.reason}`);
@@ -125,10 +125,10 @@ export class PositionManager extends EventEmitter {
     Repositories.savePaperTradeExit(trade.tradeId, executedPrice, quantitySold, realizedPnl, reason, sim.feesUsd, sim.slippageUsd);
   }
 
-  private triggerFullExit(trade: PaperTrade, price: number, reason: string) {
+  private triggerFullExit(trade: PaperTrade, price: number, reason: string, liquidityUsd: number) {
     const quantitySold = trade.tokenQuantity;
     const positionValueUsd = quantitySold * price;
-    const sim = ExecutionSimulator.simulateMarketOrder('SELL', price, positionValueUsd, positionValueUsd * 10);
+    const sim = ExecutionSimulator.simulateMarketOrder('SELL', price, positionValueUsd, liquidityUsd);
 
     let executedPrice = price;
     let exitFees = 0;
@@ -174,9 +174,9 @@ export class PositionManager extends EventEmitter {
     Repositories.savePaperTradeExit(trade.tradeId, executedPrice, quantitySold, realizedPnl, reason, exitFees, exitSlippage);
   }
 
-  public forceExit(tradeId: string, currentPrice: number, reason: string) {
+  public forceExit(tradeId: string, currentPrice: number, reason: string, liquidityUsd: number = 0) {
     const trade = this.openPositions.get(tradeId);
     if (!trade) return;
-    this.triggerFullExit(trade, currentPrice, reason);
+    this.triggerFullExit(trade, currentPrice, reason, liquidityUsd);
   }
 }

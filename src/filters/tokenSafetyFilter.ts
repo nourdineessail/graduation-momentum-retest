@@ -12,8 +12,8 @@ export class TokenSafetyFilter {
    * 3. Verifies freezeAuthority is disabled (null).
    * 4. Checks holder concentration (excluding top AMM vault).
    */
-  static async checkSafety(tokenMint: string): Promise<{ passed: boolean; reason?: string }> {
-    const mintPubKey = new PublicKey(tokenMint);
+  static async checkSafety(params: { tokenMint: string, poolAddress: string, baseVault: string, quoteVault: string }): Promise<{ passed: boolean; reason?: string }> {
+    const mintPubKey = new PublicKey(params.tokenMint);
     let lastError: any = null;
 
     // Retry loop for RPC consistency issues (load balancers hitting lagging nodes)
@@ -58,10 +58,13 @@ export class TokenSafetyFilter {
           return { passed: false, reason: 'Could not fetch token largest accounts' };
         }
 
-        // Assume the #1 largest account is the Raydium/PumpSwap AMM vault.
-        // We check the #2 account (the largest non-AMM holder).
-        if (largestAccounts.value.length > 1) {
-          const largestNonAmmHolder = largestAccounts.value[1];
+        // Assume the #1 largest account is the Raydium/PumpSwap AMM vault if not known.
+        // We exclude the known baseVault.
+        const excludedTokenAccounts = new Set([params.baseVault]);
+        const nonAmmHolders = largestAccounts.value.filter(account => !excludedTokenAccounts.has(account.address.toString()));
+
+        if (nonAmmHolders.length > 0) {
+          const largestNonAmmHolder = nonAmmHolders[0];
           const holderAmount = Number(largestNonAmmHolder.uiAmount);
           const holderPercent = (holderAmount / totalSupply) * 100;
 
@@ -77,13 +80,13 @@ export class TokenSafetyFilter {
         
         // If it's a known RPC consistency issue ("not a Token mint"), wait and retry
         if (errStr.includes('not a Token mint') && attempt < 3) {
-          logger.warn(`RPC lag detected for ${tokenMint} (attempt ${attempt}/3). Retrying in 1000ms...`);
+          logger.warn(`RPC lag detected for ${params.tokenMint} (attempt ${attempt}/3). Retrying in 1000ms...`);
           await delay(1000);
           continue;
         }
         
         // Other errors or max attempts reached
-        logger.error(`Safety check failed on attempt ${attempt}`, { tokenMint, error: errStr });
+        logger.error(`Safety check failed on attempt ${attempt}`, { tokenMint: params.tokenMint, error: errStr });
         return { passed: false, reason: `RPC error: ${errStr}` };
       }
     }
