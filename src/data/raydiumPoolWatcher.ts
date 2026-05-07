@@ -192,15 +192,15 @@ export class RaydiumPoolWatcher extends EventEmitter {
     const wsolStr = WSOL_MINT.toBase58();
     const usdcStr = USDC_MINT.toBase58();
 
-    const candidates: Array<{ poolAddress: string; tokenMint: string; baseVault: string; quoteVault: string }> = [];
+    const candidates: Array<{ poolAddress: string; tokenMint: string; quoteMint: string; baseVault: string; quoteVault: string }> = [];
 
     // Helper to safely extract candidate
-    const addCandidate = (amm: string, coin: string, bv: string, qv: string) => {
+    const addCandidate = (amm: string, coin: string, bv: string, qv: string, quoteMint: string) => {
       if (SYSTEM_PROGRAMS.has(amm) || SYSTEM_PROGRAMS.has(coin)) return;
       if (coin.startsWith('jitodont') || amm.startsWith('jitodont')) return;
       if (coin.startsWith('Sysvar') || amm.startsWith('Sysvar')) return;
       if (coin === wsolStr || coin === usdcStr) return;
-      candidates.push({ poolAddress: amm, tokenMint: coin, baseVault: bv, quoteVault: qv });
+      candidates.push({ poolAddress: amm, tokenMint: coin, quoteMint, baseVault: bv, quoteVault: qv });
     };
 
     // Helper to parse instruction accounts
@@ -212,9 +212,9 @@ export class RaydiumPoolWatcher extends EventEmitter {
         const amm = allAccounts[accountIndexes[4]];
         
         if (pcMint === wsolStr || pcMint === usdcStr) {
-          addCandidate(amm, coinMint, allAccounts[accountIndexes[10]], allAccounts[accountIndexes[11]]);
+          addCandidate(amm, coinMint, allAccounts[accountIndexes[10]], allAccounts[accountIndexes[11]], pcMint);
         } else if (coinMint === wsolStr || coinMint === usdcStr) {
-          addCandidate(amm, pcMint, allAccounts[accountIndexes[11]], allAccounts[accountIndexes[10]]);
+          addCandidate(amm, pcMint, allAccounts[accountIndexes[11]], allAccounts[accountIndexes[10]], coinMint);
         }
       } 
       else if (programId === RAYDIUM_CPMM_PROGRAM_ID.toBase58() && accountIndexes.length >= 15) {
@@ -224,9 +224,9 @@ export class RaydiumPoolWatcher extends EventEmitter {
         const token1 = allAccounts[accountIndexes[12]];
         
         if (token1 === wsolStr || token1 === usdcStr) {
-          addCandidate(pool, token0, allAccounts[accountIndexes[13]], allAccounts[accountIndexes[14]]);
+          addCandidate(pool, token0, allAccounts[accountIndexes[13]], allAccounts[accountIndexes[14]], token1);
         } else if (token0 === wsolStr || token0 === usdcStr) {
-          addCandidate(pool, token1, allAccounts[accountIndexes[14]], allAccounts[accountIndexes[13]]);
+          addCandidate(pool, token1, allAccounts[accountIndexes[14]], allAccounts[accountIndexes[13]], token0);
         }
       }
       else if (programId === PUMP_FUN_AMM_PROGRAM_ID.toBase58() && accountIndexes.length >= 5) {
@@ -277,8 +277,15 @@ export class RaydiumPoolWatcher extends EventEmitter {
     }
 
     // 3. Process extracted candidates
+    if (candidates.length === 0) {
+      logger.info(`[PoolWatcher] TX ${signature.slice(0, 8)} (${sourceLabel}): No valid pool candidates extracted (heuristic mismatch)`);
+    }
+
     for (const candidate of candidates) {
-      if (this.watchedPools.has(candidate.poolAddress)) continue;
+      if (this.watchedPools.has(candidate.poolAddress)) {
+        logger.debug(`[PoolWatcher] Pool ${candidate.poolAddress.slice(0, 8)} already watched, skipping`);
+        continue;
+      }
 
       this.watchedPools.add(candidate.poolAddress);
       this.detectedCount++;
@@ -286,13 +293,13 @@ export class RaydiumPoolWatcher extends EventEmitter {
       const poolInfo: PoolInfo = {
         poolAddress: candidate.poolAddress,
         tokenMint: candidate.tokenMint,
-        quoteMint: wsolStr, // Fallback, could check usdcStr
+        quoteMint: candidate.quoteMint,
         baseVault: candidate.baseVault,
         quoteVault: candidate.quoteVault,
         createdAt: new Date(),
       };
 
-      logger.info(`🎯 [NEW POOL] ${sourceLabel} | ${candidate.poolAddress} | token: ${candidate.tokenMint}`);
+      logger.info(`🎯 [NEW POOL] ${sourceLabel} | ${candidate.poolAddress} | token: ${candidate.tokenMint} | quote: ${candidate.quoteMint === wsolStr ? 'SOL' : 'USDC'}`);
       LocalFileLogger.log('INFO', 'PoolWatcher', 'POOL_DETECTED', `Pool #${this.detectedCount}`, { ...poolInfo, signature });
 
       this.emit('newPool', poolInfo);

@@ -25,7 +25,7 @@ export class PriceEngine {
         if (price > 0) {
           this.MOCK_SOL_PRICE = price;
           this.consecutiveFailures = 0;
-          logger.debug(`SOL price updated from Binance: $${price.toFixed(2)}`);
+          logger.info(`SOL price updated from Binance: $${price.toFixed(2)}`);
           return;
         }
       }
@@ -44,7 +44,7 @@ export class PriceEngine {
         if (price && price > 0) {
           this.MOCK_SOL_PRICE = price;
           this.consecutiveFailures = 0;
-          logger.debug(`SOL price updated from CoinGecko: $${price.toFixed(2)}`);
+          logger.info(`SOL price updated from CoinGecko: $${price.toFixed(2)}`);
           return;
         }
       }
