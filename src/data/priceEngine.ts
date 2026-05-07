@@ -6,6 +6,7 @@ export class PriceEngine {
   // Live SOL price fetched from Jupiter. Defaults to 150 until first fetch.
   public static MOCK_SOL_PRICE = 150.0;
   private static pollInterval: NodeJS.Timeout | null = null;
+  private static consecutiveFailures = 0;
 
   static async fetchSolPrice() {
     try {
@@ -14,10 +15,18 @@ export class PriceEngine {
         const json = await response.json();
         if (json.data && json.data.SOL && json.data.SOL.price) {
           this.MOCK_SOL_PRICE = json.data.SOL.price;
+          this.consecutiveFailures = 0; // Reset on success
         }
+      } else {
+        throw new Error(`HTTP ${response.status}`);
       }
     } catch (err) {
-      logger.warn('Failed to fetch SOL price from Jupiter', { err });
+      this.consecutiveFailures++;
+      if (this.consecutiveFailures >= 3) {
+        logger.error(`Failed to fetch SOL price from Jupiter ${this.consecutiveFailures} times consecutively!`, { err });
+      } else {
+        logger.warn(`Failed to fetch SOL price from Jupiter (Attempt ${this.consecutiveFailures}/3)`, { err });
+      }
     }
   }
 

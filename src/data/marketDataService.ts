@@ -8,18 +8,38 @@ import { EventEmitter } from 'events';
 export class MarketDataService extends EventEmitter {
   private watchedPools: Map<string, PoolInfo> = new Map();
   private poolHistory: Map<string, MarketData[]> = new Map();
+  private decimalsCache: Map<string, { base: number, quote: number }> = new Map();
   private pollingInterval: NodeJS.Timeout | null = null;
   private isPolling = false;
 
-  public watchPool(pool: PoolInfo) {
+  public async watchPool(pool: PoolInfo) {
     this.watchedPools.set(pool.poolAddress, pool);
     this.poolHistory.set(pool.poolAddress, []);
     logger.info(`MarketDataService watching pool: ${pool.poolAddress}`);
+
+    try {
+      const mints = await solanaConnection.getMultipleAccountsInfo([new PublicKey(pool.tokenMint), new PublicKey(pool.quoteMint)]);
+      const baseMint = mints[0];
+      const quoteMint = mints[1];
+      if (baseMint && quoteMint) {
+        // In SPL Token Mint Layout, decimals is a u8 at offset 44
+        const baseDecimals = baseMint.data.readUInt8(44);
+        const quoteDecimals = quoteMint.data.readUInt8(44);
+        this.decimalsCache.set(pool.poolAddress, { base: baseDecimals, quote: quoteDecimals });
+      } else {
+        logger.warn(`Could not fetch mint info for pool ${pool.poolAddress}, using defaults`);
+        this.decimalsCache.set(pool.poolAddress, { base: 6, quote: pool.quoteMint.includes('EPj') ? 6 : 9 });
+      }
+    } catch (err) {
+      logger.error('Failed to fetch decimals', { err, poolAddress: pool.poolAddress });
+      this.decimalsCache.set(pool.poolAddress, { base: 6, quote: pool.quoteMint.includes('EPj') ? 6 : 9 });
+    }
   }
 
   public unwatchPool(poolAddress: string) {
     this.watchedPools.delete(poolAddress);
     this.poolHistory.delete(poolAddress);
+    this.decimalsCache.delete(poolAddress);
     logger.info(`MarketDataService unwatched pool: ${poolAddress}`);
   }
 
@@ -65,9 +85,10 @@ export class MarketDataService extends EventEmitter {
         const baseBalance = baseVaultInfo.data.readBigUInt64LE(64);
         const quoteBalance = quoteVaultInfo.data.readBigUInt64LE(64);
 
-        // Approximation for decimals. Ideally, fetch mint info once.
-        const baseDecimals = 6; // Typical for memecoins
-        const quoteDecimals = pool.quoteMint.includes('EPj') ? 6 : 9; // USDC: 6, SOL: 9
+        // Use cached decimals or fallback
+        const cachedDecimals = this.decimalsCache.get(pool.poolAddress) || { base: 6, quote: pool.quoteMint.includes('EPj') ? 6 : 9 };
+        const baseDecimals = cachedDecimals.base;
+        const quoteDecimals = cachedDecimals.quote;
 
         const price = PriceEngine.calculatePrice(baseBalance, baseDecimals, quoteBalance, quoteDecimals, pool.quoteMint);
         const liquidityUsd = PriceEngine.calculateLiquidityUsd(quoteBalance, quoteDecimals, pool.quoteMint);
@@ -127,9 +148,31 @@ export class MarketDataService extends EventEmitter {
         pullbackPercent = ((localHigh - currentPrice) / localHigh) * 100;
       }
       
-      // Approximation of VWAP
-      const sumPrice = history.reduce((sum, h) => sum + h.price, 0) + currentPrice;
-      vwap = sumPrice / (history.length + 1);
+      // True volume-weighted VWAP approximation using absolute quote vault delta USD as volume weight
+      let sumProduct = 0;
+      let sumVolume = 0;
+
+      for (const h of history) {
+        const volume = Math.abs(h.quoteVaultDeltaUsd);
+        if (volume > 0) {
+          sumProduct += h.price * volume;
+          sumVolume += volume;
+        }
+      }
+
+      const currentVolume = Math.abs(quoteVaultDeltaUsd);
+      if (currentVolume > 0) {
+        sumProduct += currentPrice * currentVolume;
+        sumVolume += currentVolume;
+      }
+
+      if (sumVolume > 0) {
+        vwap = sumProduct / sumVolume;
+      } else {
+        // Fallback to simple average if absolutely zero volume observed
+        const sumPrice = history.reduce((sum, h) => sum + h.price, 0) + currentPrice;
+        vwap = sumPrice / (history.length + 1);
+      }
     }
 
     const newData: MarketData = {

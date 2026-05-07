@@ -2,7 +2,6 @@ import { PaperTrade } from '../core/types';
 import { logger } from '../logging/logger';
 import { LocalFileLogger } from '../logging/localFileLogger';
 
-import { env } from '../config/env';
 import { strategyConfig } from '../config/strategyConfig';
 
 export class RiskManager {
@@ -61,15 +60,15 @@ export class RiskManager {
     }
 
     // Max open positions
-    if (this.openPositions.size >= env.MAX_OPEN_POSITIONS) {
-      return { allowed: false, reason: `Max open positions (${env.MAX_OPEN_POSITIONS}) reached` };
+    if (this.openPositions.size >= strategyConfig.MAX_OPEN_POSITIONS) {
+      return { allowed: false, reason: `Max open positions (${strategyConfig.MAX_OPEN_POSITIONS}) reached` };
     }
 
     // Max trades per hour
     const oneHourAgo = Date.now() - 3600 * 1000;
     const recentTrades = this.tradeTimestamps.filter(ts => ts > oneHourAgo);
-    if (recentTrades.length >= env.MAX_TRADES_PER_HOUR) {
-      return { allowed: false, reason: `Max trades per hour (${env.MAX_TRADES_PER_HOUR}) reached` };
+    if (recentTrades.length >= strategyConfig.MAX_TRADES_PER_HOUR) {
+      return { allowed: false, reason: `Max trades per hour (${strategyConfig.MAX_TRADES_PER_HOUR}) reached` };
     }
 
     // Per-token cooldown

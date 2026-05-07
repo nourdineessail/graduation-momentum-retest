@@ -196,15 +196,13 @@ ORDER BY count DESC;
 
 ## Known Limitations
 
-1. **Pool Detection Accuracy** — Raydium pool keys are extracted using a heuristic account index. For production accuracy, a full instruction decoder for `Initialize2` is recommended. The [Raydium SDK](https://github.com/raydium-io/raydium-sdk) provides this.
+1. **PumpSwap Support Disabled** — Native Pump.fun AMM pools use dynamic bonding curves rather than standard SPL token vaults. As a result, parsing their vault balances fails with standard token layouts. PUMPSWAP pool creation tracking is explicitly commented out in `raydiumPoolWatcher.ts` for V1. The bot currently tracks only Raydium V4, CPMM, and Pump migrations into Raydium.
 
-2. **Buy/Sell Ratio Approximation** — Without a dedicated indexer, the bot approximates buy/sell pressure using randomized mock values in `MarketDataService`. In production, replace this with actual swap log parsing via `swapParser.ts`.
+2. **Pool Detection Accuracy** — Raydium pool keys are extracted using a heuristic account index. For production accuracy, a full instruction decoder for `Initialize2` is recommended. The [Raydium SDK](https://github.com/raydium-io/raydium-sdk) provides this.
 
-3. **SOL Price** — The `PriceEngine` uses a hardcoded `MOCK_SOL_PRICE` for paper trading. Connect to Pyth Network or Jupiter price API for real-time SOL/USD rates.
+3. **Buy/Sell Ratio Approximation** — Without a dedicated indexer, the bot approximates net buy pressure using quote-vault deltas between polling intervals. It is NOT true gross buy/sell swap volume.
 
 4. **Free RPC Limitations** — Free Solana RPC endpoints often have strict rate limits and unstable WSS. Use a dedicated provider (Helius, QuickNode, Triton) for reliable operation.
-
-5. **Token Decimals** — Base token decimals are approximated as 6. Fetching real mint info once per pool and caching it would improve accuracy.
 
 ---
 
