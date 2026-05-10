@@ -15,6 +15,7 @@ const repositories_1 = require("./storage/repositories");
 const time_1 = require("./utils/time");
 const strategyConfig_1 = require("./config/strategyConfig");
 const env_1 = require("./config/env");
+const priceEngine_1 = require("./data/priceEngine");
 // ─── Graceful Shutdown ───────────────────────────────────────────────────────
 let isShuttingDown = false;
 async function shutdown(signal) {
@@ -26,6 +27,7 @@ async function shutdown(signal) {
     poolWatcher.stop();
     marketDataService.stopPolling();
     performanceTracker.stop();
+    priceEngine_1.PriceEngine.stopPricePolling();
     localFileLogger_1.LocalFileLogger.shutdown();
     process.exit(0);
 }
@@ -44,6 +46,7 @@ process.on('uncaughtException', (err) => {
 });
 // ─── Core Instances ──────────────────────────────────────────────────────────
 localFileLogger_1.LocalFileLogger.init();
+priceEngine_1.PriceEngine.startPricePolling();
 const positionManager = new positionManager_1.PositionManager();
 const paperBroker = new paperBroker_1.PaperBroker(positionManager);
 const riskManager = new riskManager_1.RiskManager();
@@ -51,18 +54,22 @@ const performanceTracker = new performanceTracker_1.PerformanceTracker();
 const strategy = new graduationMomentumRetest_1.GraduationMomentumRetest();
 const marketDataService = new marketDataService_1.MarketDataService();
 const poolWatcher = new raydiumPoolWatcher_1.RaydiumPoolWatcher();
-// Track last market data timestamp per pool for stale detection
-const lastMarketUpdateMs = new Map();
+// Track last market data per pool for stale detection and emergency exits
+const lastMarketData = new Map();
+function stopWatchingPool(poolAddress) {
+    marketDataService.unwatchPool(poolAddress);
+    lastMarketData.delete(poolAddress);
+}
 // ─── Pool Watcher Events ─────────────────────────────────────────────────────
 poolWatcher.on('newPool', async (pool) => {
     localFileLogger_1.LocalFileLogger.log('INFO', 'Main', 'POOL_DETECTED', `Pool: ${pool.poolAddress}`, pool, { token: pool.tokenMint, pool: pool.poolAddress });
     telegramNotifier_1.TelegramNotifier.poolDetected(pool.tokenMint, pool.poolAddress);
-    marketDataService.watchPool(pool);
+    await marketDataService.watchPool(pool);
     await strategy.onPoolDetected(pool);
 });
 // ─── Market Data Events ──────────────────────────────────────────────────────
 marketDataService.on('update', (poolAddress, marketData) => {
-    lastMarketUpdateMs.set(poolAddress, marketData.timestamp);
+    lastMarketData.set(poolAddress, marketData);
     // Reject stale data
     if (riskManager.isDataStale(marketData.timestamp)) {
         logger_1.logger.warn(`Stale data for pool ${poolAddress}, skipping strategy eval`);
@@ -72,16 +79,24 @@ marketDataService.on('update', (poolAddress, marketData) => {
     const poolInfo = strategy['stateMachine']?.getPoolInfo(poolAddress);
     if (poolInfo && (0, time_1.minutesSince)(poolInfo.createdAt) > strategyConfig_1.strategyConfig.MAX_TOKEN_AGE_MINUTES) {
         logger_1.logger.info(`Pool ${poolAddress} exceeded max age. Removing.`);
-        marketDataService.unwatchPool(poolAddress);
+        stopWatchingPool(poolAddress);
         return;
     }
     // Update open positions with current price
     for (const position of positionManager.getOpenPositions()) {
         if (position.poolAddress === poolAddress) {
-            positionManager.updatePosition(position.tradeId, marketData.price);
+            positionManager.updatePosition(position.tradeId, marketData.price, marketData.liquidityUsd);
         }
     }
     strategy.onMarketDataUpdate(poolAddress, marketData);
+});
+strategy.on('poolRejected', (poolAddress, reason) => {
+    stopWatchingPool(poolAddress);
+    logger_1.logger.info(`Stopped market data polling for rejected pool ${poolAddress}`, { reason });
+});
+strategy.on('poolErrored', (poolAddress, error) => {
+    stopWatchingPool(poolAddress);
+    logger_1.logger.info(`Stopped market data polling for errored pool ${poolAddress}`, { error });
 });
 // ─── Strategy Signal Events ───────────────────────────────────────────────────
 strategy.on('signal', async (signal) => {
@@ -90,6 +105,7 @@ strategy.on('signal', async (signal) => {
         logger_1.logger.warn(`Risk manager blocked trade: ${riskCheck.reason}`, { signalId: signal.id });
         localFileLogger_1.LocalFileLogger.log('WARN', 'RiskManager', 'ENTRY_BLOCKED', riskCheck.reason || 'Blocked', {}, { token: signal.tokenMint, pool: signal.poolAddress });
         performanceTracker.recordRejectedSignal();
+        stopWatchingPool(signal.poolAddress);
         return;
     }
     if (!env_1.env.PAPER_TRADING) {
@@ -102,15 +118,20 @@ strategy.on('signal', async (signal) => {
         performanceTracker.recordTrade(trade);
         telegramNotifier_1.TelegramNotifier.tradeOpened(trade.tradeId, trade.tokenMint, trade.entryPrice, trade.positionSizeUsd);
     }
+    else {
+        stopWatchingPool(signal.poolAddress);
+    }
 });
 // ─── Emergency Exit Event ─────────────────────────────────────────────────────
 strategy.on('emergencyExit', (pool, reason) => {
     for (const position of positionManager.getOpenPositions()) {
         if (position.poolAddress === pool.poolAddress) {
-            const lastData = lastMarketUpdateMs.get(pool.poolAddress);
+            const lastData = lastMarketData.get(pool.poolAddress);
             logger_1.logger.warn(`Emergency exit [${reason}] triggered for ${position.tradeId}`);
-            // Use last known price approximation — this is the best we can do without market depth
-            positionManager.forceExit(position.tradeId, position.entryPrice * 0.85, `EMERGENCY_${reason}`);
+            // Use last known price and liquidity approximation
+            const exitPrice = lastData ? lastData.price : position.entryPrice * 0.85;
+            const liquidityUsd = lastData ? lastData.liquidityUsd : 0;
+            positionManager.forceExit(position.tradeId, exitPrice, `EMERGENCY_${reason}`, liquidityUsd);
         }
     }
 });
@@ -119,7 +140,7 @@ positionManager.on('fullExit', async (event) => {
     riskManager.onTradeClosed(event.trade);
     performanceTracker.recordTrade(event.trade);
     strategy.notifyTradeClosed(event.trade.poolAddress);
-    marketDataService.unwatchPool(event.trade.poolAddress);
+    stopWatchingPool(event.trade.poolAddress);
     const isTP = event.exitReason?.includes('TAKE_PROFIT');
     const isSL = event.exitReason === 'STOP_LOSS';
     if (isSL)

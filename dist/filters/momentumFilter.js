@@ -24,7 +24,11 @@ class MomentumFilter {
     }
     static checkBuyPressure(marketData) {
         const buyPressurePasses = marketData.netBuyPressure >= strategyConfig_1.strategyConfig.MIN_BUY_SELL_RATIO;
-        if (marketData.dataQuality === 'PARTIAL' || marketData.dataQuality === 'MOCKED') {
+        if (marketData.dataQuality === 'MOCKED')
+            return false;
+        if (marketData.dataQuality === 'UNKNOWN')
+            return false;
+        if (marketData.dataQuality === 'PARTIAL') {
             // Bypass unique buyers check if we don't have perfect wallet tracking
             // Instead, we require slightly stronger net flow confirmation (e.g. 1.1x the config)
             return marketData.netBuyPressure >= (strategyConfig_1.strategyConfig.MIN_BUY_SELL_RATIO * 1.1);

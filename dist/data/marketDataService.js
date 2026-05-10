@@ -9,16 +9,37 @@ const events_1 = require("events");
 class MarketDataService extends events_1.EventEmitter {
     watchedPools = new Map();
     poolHistory = new Map();
+    decimalsCache = new Map();
     pollingInterval = null;
     isPolling = false;
-    watchPool(pool) {
+    async watchPool(pool) {
         this.watchedPools.set(pool.poolAddress, pool);
         this.poolHistory.set(pool.poolAddress, []);
         logger_1.logger.info(`MarketDataService watching pool: ${pool.poolAddress}`);
+        try {
+            const mints = await solanaConnection_1.solanaConnection.getMultipleAccountsInfo([new web3_js_1.PublicKey(pool.tokenMint), new web3_js_1.PublicKey(pool.quoteMint)]);
+            const baseMint = mints[0];
+            const quoteMint = mints[1];
+            if (baseMint && quoteMint) {
+                // In SPL Token Mint Layout, decimals is a u8 at offset 44
+                const baseDecimals = baseMint.data.readUInt8(44);
+                const quoteDecimals = quoteMint.data.readUInt8(44);
+                this.decimalsCache.set(pool.poolAddress, { base: baseDecimals, quote: quoteDecimals });
+            }
+            else {
+                logger_1.logger.warn(`Could not fetch mint info for pool ${pool.poolAddress}, using defaults`);
+                this.decimalsCache.set(pool.poolAddress, { base: 6, quote: pool.quoteMint.includes('EPj') ? 6 : 9 });
+            }
+        }
+        catch (err) {
+            logger_1.logger.error('Failed to fetch decimals', { err, poolAddress: pool.poolAddress });
+            this.decimalsCache.set(pool.poolAddress, { base: 6, quote: pool.quoteMint.includes('EPj') ? 6 : 9 });
+        }
     }
     unwatchPool(poolAddress) {
         this.watchedPools.delete(poolAddress);
         this.poolHistory.delete(poolAddress);
+        this.decimalsCache.delete(poolAddress);
         logger_1.logger.info(`MarketDataService unwatched pool: ${poolAddress}`);
     }
     startPolling(intervalMs = 2000) {
@@ -52,17 +73,39 @@ class MarketDataService extends events_1.EventEmitter {
                 const quoteVaultInfo = accountInfos[i * 2 + 1];
                 if (!baseVaultInfo || !quoteVaultInfo)
                     continue;
-                // In a real implementation, we use SPL Token Account layout to decode the balance.
-                // For this simulation, we'll approximate extraction from the raw data buffer.
-                // The balance in an SPL Token Account is at offset 64, length 8 (u64).
-                const baseBalance = baseVaultInfo.data.readBigUInt64LE(64);
-                const quoteBalance = quoteVaultInfo.data.readBigUInt64LE(64);
-                // Approximation for decimals. Ideally, fetch mint info once.
-                const baseDecimals = 6; // Typical for memecoins
-                const quoteDecimals = pool.quoteMint.includes('EPj') ? 6 : 9; // USDC: 6, SOL: 9
+                let baseBalance;
+                let quoteBalance;
+                if (pool.baseVault === pool.quoteVault) {
+                    // Pump.fun Bonding Curve Layout (Anchor PDA)
+                    // 8-byte discriminator, then virtualTokenReserves (8), then virtualSolReserves (16)
+                    if (baseVaultInfo.data.length >= 24) {
+                        baseBalance = baseVaultInfo.data.readBigUInt64LE(8);
+                        quoteBalance = baseVaultInfo.data.readBigUInt64LE(16);
+                    }
+                    else {
+                        baseBalance = 0n;
+                        quoteBalance = 0n;
+                    }
+                }
+                else {
+                    // Standard SPL Token Account layout
+                    // The balance is at offset 64, length 8 (u64).
+                    if (baseVaultInfo.data.length >= 72 && quoteVaultInfo.data.length >= 72) {
+                        baseBalance = baseVaultInfo.data.readBigUInt64LE(64);
+                        quoteBalance = quoteVaultInfo.data.readBigUInt64LE(64);
+                    }
+                    else {
+                        baseBalance = 0n;
+                        quoteBalance = 0n;
+                    }
+                }
+                // Use cached decimals or fallback
+                const cachedDecimals = this.decimalsCache.get(pool.poolAddress) || { base: 6, quote: pool.quoteMint.includes('EPj') ? 6 : 9 };
+                const baseDecimals = cachedDecimals.base;
+                const quoteDecimals = cachedDecimals.quote;
                 const price = priceEngine_1.PriceEngine.calculatePrice(baseBalance, baseDecimals, quoteBalance, quoteDecimals, pool.quoteMint);
                 const liquidityUsd = priceEngine_1.PriceEngine.calculateLiquidityUsd(quoteBalance, quoteDecimals, pool.quoteMint);
-                this.updateMarketData(pool.poolAddress, price, liquidityUsd, Number(quoteBalance));
+                this.updateMarketData(pool.poolAddress, price, liquidityUsd, Number(quoteBalance), pool.quoteMint, quoteDecimals);
             }
         }
         catch (error) {
@@ -72,7 +115,7 @@ class MarketDataService extends events_1.EventEmitter {
             this.isPolling = false;
         }
     }
-    updateMarketData(poolAddress, currentPrice, liquidityUsd, currentQuoteBalance) {
+    updateMarketData(poolAddress, currentPrice, liquidityUsd, currentQuoteBalance, quoteMint, quoteDecimals) {
         const history = this.poolHistory.get(poolAddress);
         if (!history)
             return;
@@ -91,10 +134,13 @@ class MarketDataService extends events_1.EventEmitter {
             // (This is a simplified estimation since PriceEngine handles decimals, we just use the ratio of liquidityUsd).
             // Assuming liquidityUsd is proportional to quoteBalance.
             const lastQuoteBalance = last._quoteBalance || currentQuoteBalance;
-            const quoteDeltaNative = currentQuoteBalance - lastQuoteBalance;
-            // Calculate delta in USD. If quoteBalance is 0, avoid div by zero.
-            if (currentQuoteBalance > 0) {
-                quoteVaultDeltaUsd = (quoteDeltaNative / currentQuoteBalance) * liquidityUsd;
+            const quoteDeltaRaw = currentQuoteBalance - lastQuoteBalance;
+            const quoteDeltaUi = quoteDeltaRaw / Math.pow(10, quoteDecimals);
+            if (quoteMint.includes('So111') || quoteMint.includes('WSOL')) {
+                quoteVaultDeltaUsd = quoteDeltaUi * priceEngine_1.PriceEngine.MOCK_SOL_PRICE;
+            }
+            else {
+                quoteVaultDeltaUsd = quoteDeltaUi; // Assume USDC or 1:1 stable
             }
             if (quoteVaultDeltaUsd > 0) {
                 flowDirection = 'BUY';
@@ -109,9 +155,29 @@ class MarketDataService extends events_1.EventEmitter {
             if (localHigh > 0) {
                 pullbackPercent = ((localHigh - currentPrice) / localHigh) * 100;
             }
-            // Approximation of VWAP
-            const sumPrice = history.reduce((sum, h) => sum + h.price, 0) + currentPrice;
-            vwap = sumPrice / (history.length + 1);
+            // True volume-weighted VWAP approximation using absolute quote vault delta USD as volume weight
+            let sumProduct = 0;
+            let sumVolume = 0;
+            for (const h of history) {
+                const volume = Math.abs(h.quoteVaultDeltaUsd);
+                if (volume > 0) {
+                    sumProduct += h.price * volume;
+                    sumVolume += volume;
+                }
+            }
+            const currentVolume = Math.abs(quoteVaultDeltaUsd);
+            if (currentVolume > 0) {
+                sumProduct += currentPrice * currentVolume;
+                sumVolume += currentVolume;
+            }
+            if (sumVolume > 0) {
+                vwap = sumProduct / sumVolume;
+            }
+            else {
+                // Fallback to simple average if absolutely zero volume observed
+                const sumPrice = history.reduce((sum, h) => sum + h.price, 0) + currentPrice;
+                vwap = sumPrice / (history.length + 1);
+            }
         }
         const newData = {
             timestamp: Date.now(),

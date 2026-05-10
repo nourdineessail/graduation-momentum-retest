@@ -29,6 +29,11 @@ const envSchema = zod_1.z.object({
     TIME_STOP_MINUTES: zod_1.z.coerce.number().positive().default(15),
     MAX_OPEN_POSITIONS: zod_1.z.coerce.number().int().positive().default(3),
     MAX_TRADES_PER_HOUR: zod_1.z.coerce.number().int().positive().default(10),
+    MAX_DAILY_LOSS_USD: zod_1.z.coerce.number().positive().default(100),
+    MAX_CONSECUTIVE_LOSSES: zod_1.z.coerce.number().int().positive().default(4),
+    COOLDOWN_AFTER_LOSSES_MINUTES: zod_1.z.coerce.number().positive().default(30),
+    PER_TOKEN_COOLDOWN_MINUTES: zod_1.z.coerce.number().positive().default(60),
+    STALE_DATA_MAX_SECONDS: zod_1.z.coerce.number().positive().default(20),
     LOCAL_LOG_PATH: zod_1.z.string().default('./logs/bot.log'),
 });
 const _env = envSchema.safeParse(process.env);

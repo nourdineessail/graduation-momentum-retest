@@ -25,7 +25,7 @@ import { Repositories } from '../storage/repositories';
  */
 
 const PROGRAMS_TO_WATCH = [
-  { id: PUMP_FUN_MIGRATION_PROGRAM_ID, label: 'PumpMigration' },
+  // { id: PUMP_FUN_MIGRATION_PROGRAM_ID, label: 'PumpMigration' }, // Disabled to prevent rate limits
   { id: RAYDIUM_CPMM_PROGRAM_ID,       label: 'RaydiumCPMM'   },
   { id: PUMP_FUN_AMM_PROGRAM_ID,       label: 'PumpFunAMM'    },
   { id: RAYDIUM_V4_PROGRAM_ID,         label: 'RaydiumV4'     },
@@ -62,6 +62,7 @@ export class RaydiumPoolWatcher extends EventEmitter {
   private totalLogBatches = 0;
   private diagnosticDumped: Set<string> = new Set();
   private detectedCount = 0;
+  private lastPumpFunFetch = 0;
 
   public async start() {
     logger.info('🚀 Starting Pool Watcher — Optimized WSS + Polling');
@@ -93,26 +94,34 @@ export class RaydiumPoolWatcher extends EventEmitter {
     }
   }
 
-  private handleWssLog(logs: { signature: string; err: any; logs: string[] }, programLabel: string) {
+  private handleWssLog(logs: { signature: string; err: any; logs: string[] }, label: string) {
     if (logs.err) return;
+
+    // Throttle Pump.fun token parsing to prevent 429 rate limit
+    if (label === 'PumpFunAMM') {
+      const now = Date.now();
+      if (now - this.lastPumpFunFetch < 5000) {
+        return; // Sample at max 1 tx per 5 seconds
+      }
+      this.lastPumpFunFetch = now;
+    }
+
     this.totalLogBatches++;
 
-    // KEY PERFORMANCE FIX: Only proceed if the log explicitly mentions initialization.
-    // Raydium v4: "InitializeInstruction2" (or sometimes "initialize2")
-    // Raydium CPMM: "initialize_cpmm"
-    // Pump.fun PumpSwap AMM: "CreatePool" (which lowercases to "createpool")
-    const logString = logs.logs.join(' ').toLowerCase();
-    const isInit = logString.includes('initializeinstruction2') || 
-                   logString.includes('initialize2') || 
-                   logString.includes('initialize_cpmm') || 
-                   logString.includes('createpool') ||
-                   logString.includes('create_pool');
+    const isInit = logs.logs.some(log => {
+      const l = log.toLowerCase();
+      if (l.includes('initialize2') || l.includes('initializeinstruction2')) return true; // Raydium V4
+      if (l.includes('instruction: create')) return true; // Pump.fun
+      // CPMM initialization log. Ensure it's not a Token/ATA program log by excluding "account"
+      if (l.includes('instruction: initialize') && !l.includes('account')) return true; 
+      return false;
+    });
 
     if (!isInit) return;
 
     if (!this.processedSignatures.has(logs.signature)) {
-      logger.info(`[PoolWatcher] Candidate found via WSS logs (${programLabel}): ${logs.signature.slice(0, 8)}...`);
-      this.processSignature(logs.signature, programLabel).catch(() => {});
+      logger.debug(`[PoolWatcher] Candidate found via WSS logs (${label}): ${logs.signature.slice(0, 8)}...`);
+      this.processSignature(logs.signature, label).catch(() => {});
     }
   }
 
@@ -144,8 +153,6 @@ export class RaydiumPoolWatcher extends EventEmitter {
       this.lastSignatures.set(label, sigs[0].signature);
 
       for (const sig of newSigs.filter(s => !s.err)) {
-        // Polling is a bit more expensive as we don't have logs, 
-        // so we only process if we haven't seen it.
         if (!this.processedSignatures.has(sig.signature)) {
           await this.processSignature(sig.signature, label);
         }
@@ -181,7 +188,7 @@ export class RaydiumPoolWatcher extends EventEmitter {
     sourceLabel: string
   ): Promise<void> {
     const message = tx.transaction.message;
-    const accountKeys = message.getAccountKeys();
+    const accountKeys = message.getAccountKeys({ accountKeysFromLookups: tx.meta?.loadedAddresses });
     const allAccounts: string[] = accountKeys.staticAccountKeys.map(k => k.toBase58());
     const lookupAccounts = accountKeys.accountKeysFromLookups;
     if (lookupAccounts) {
@@ -194,7 +201,6 @@ export class RaydiumPoolWatcher extends EventEmitter {
 
     const candidates: Array<{ poolAddress: string; tokenMint: string; quoteMint: string; baseVault: string; quoteVault: string }> = [];
 
-    // Helper to safely extract candidate
     const addCandidate = (amm: string, coin: string, bv: string, qv: string, quoteMint: string) => {
       if (SYSTEM_PROGRAMS.has(amm) || SYSTEM_PROGRAMS.has(coin)) return;
       if (coin.startsWith('jitodont') || amm.startsWith('jitodont')) return;
@@ -203,10 +209,8 @@ export class RaydiumPoolWatcher extends EventEmitter {
       candidates.push({ poolAddress: amm, tokenMint: coin, quoteMint, baseVault: bv, quoteVault: qv });
     };
 
-    // Helper to parse instruction accounts
     const parseInstruction = (programId: string, accountIndexes: number[]) => {
       if (programId === RAYDIUM_V4_PROGRAM_ID.toBase58() && accountIndexes.length >= 12) {
-        // Raydium v4 Initialize2: 4=amm, 8=coinMint, 9=pcMint, 10=coinVault, 11=pcVault
         const coinMint = allAccounts[accountIndexes[8]];
         const pcMint = allAccounts[accountIndexes[9]];
         const amm = allAccounts[accountIndexes[4]];
@@ -217,22 +221,18 @@ export class RaydiumPoolWatcher extends EventEmitter {
           addCandidate(amm, pcMint, allAccounts[accountIndexes[11]], allAccounts[accountIndexes[10]], coinMint);
         }
       } 
-      else if (programId === RAYDIUM_CPMM_PROGRAM_ID.toBase58() && accountIndexes.length >= 15) {
-        // CPMM Initialize: 3=pool, 11=token0Mint, 12=token1Mint, 13=token0Vault, 14=token1Vault
+      else if (programId === RAYDIUM_CPMM_PROGRAM_ID.toBase58() && accountIndexes.length >= 12) {
         const pool = allAccounts[accountIndexes[3]];
-        const token0 = allAccounts[accountIndexes[11]];
-        const token1 = allAccounts[accountIndexes[12]];
+        const token0 = allAccounts[accountIndexes[4]];
+        const token1 = allAccounts[accountIndexes[5]];
         
         if (token1 === wsolStr || token1 === usdcStr) {
-          addCandidate(pool, token0, allAccounts[accountIndexes[13]], allAccounts[accountIndexes[14]], token1);
+          addCandidate(pool, token0, allAccounts[accountIndexes[10]], allAccounts[accountIndexes[11]], token1);
         } else if (token0 === wsolStr || token0 === usdcStr) {
-          addCandidate(pool, token1, allAccounts[accountIndexes[14]], allAccounts[accountIndexes[13]], token0);
+          addCandidate(pool, token1, allAccounts[accountIndexes[11]], allAccounts[accountIndexes[10]], token0);
         }
       }
       else if (programId === PUMP_FUN_AMM_PROGRAM_ID.toBase58() && accountIndexes.length >= 5) {
-        // PumpSwap CreatePool (native Pump.fun DEX): 
-        // Index 1 and 2 swap between being the pool address and the global config (ADyA...)
-        // Index 3 is always the tokenMint, Index 4 is always wsolMint
         const acc1 = allAccounts[accountIndexes[1]];
         const acc2 = allAccounts[accountIndexes[2]];
         const PUMPSWAP_CONFIG = 'ADyA8hdefvWN2dbGGWFotbzWxrAvLW83WG6QCVXvJKqw';
@@ -241,31 +241,23 @@ export class RaydiumPoolWatcher extends EventEmitter {
         const tokenMint = allAccounts[accountIndexes[3]];
         const quoteMint = allAccounts[accountIndexes[4]];
         
-        // FIXME: Pump.fun uses bonding curves, not standard SPL token vaults.
-        // We cannot blindly pass tokenMint as baseVault. MarketDataService will fail to decode balances.
-        // Temporarily skipping Pump.fun pool creation until bonding curve parsing is supported.
-        /*
         if (quoteMint === wsolStr || quoteMint === usdcStr) {
-          addCandidate(pool, tokenMint, tokenMint, quoteMint);
+          addCandidate(pool, tokenMint, pool, pool, quoteMint);
         } else if (tokenMint === wsolStr || tokenMint === usdcStr) {
-          addCandidate(pool, quoteMint, quoteMint, tokenMint);
+          addCandidate(pool, quoteMint, pool, pool, tokenMint);
         }
-        */
       }
     };
 
-    // 1. Check top-level compiled instructions
     for (const ix of message.compiledInstructions) {
       const programId = allAccounts[ix.programIdIndex];
-      parseInstruction(programId, ix.accountKeyIndexes);
+      const accIndexes = (ix as any).accounts || (ix as any).accountKeyIndexes || [];
+      parseInstruction(programId, accIndexes);
     }
 
-    // 2. Check inner instructions (crucial for Pump.fun migrations creating Raydium v4 pools via CPI)
     if (tx.meta?.innerInstructions) {
       for (const inner of tx.meta.innerInstructions) {
         for (const ix of inner.instructions) {
-          // If transaction is version 0, ix might be a MessageCompiledInstruction
-          // Handle both parsed and raw inner instructions
           const programIdIdx = (ix as any).programIdIndex;
           if (programIdIdx !== undefined) {
             const programId = allAccounts[programIdIdx];
@@ -278,7 +270,7 @@ export class RaydiumPoolWatcher extends EventEmitter {
 
     // 3. Process extracted candidates
     if (candidates.length === 0) {
-      logger.info(`[PoolWatcher] TX ${signature.slice(0, 8)} (${sourceLabel}): No valid pool candidates extracted (heuristic mismatch)`);
+      logger.debug(`[PoolWatcher] TX ${signature.slice(0, 8)} (${sourceLabel}): No valid pool candidates extracted (heuristic mismatch)`);
     }
 
     for (const candidate of candidates) {

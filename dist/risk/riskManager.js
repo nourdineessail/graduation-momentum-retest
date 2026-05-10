@@ -3,7 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.RiskManager = void 0;
 const logger_1 = require("../logging/logger");
 const localFileLogger_1 = require("../logging/localFileLogger");
-const env_1 = require("../config/env");
 const strategyConfig_1 = require("../config/strategyConfig");
 class RiskManager {
     openPositions = new Map();
@@ -55,14 +54,14 @@ class RiskManager {
             this.cooldownUntil = null;
         }
         // Max open positions
-        if (this.openPositions.size >= env_1.env.MAX_OPEN_POSITIONS) {
-            return { allowed: false, reason: `Max open positions (${env_1.env.MAX_OPEN_POSITIONS}) reached` };
+        if (this.openPositions.size >= strategyConfig_1.strategyConfig.MAX_OPEN_POSITIONS) {
+            return { allowed: false, reason: `Max open positions (${strategyConfig_1.strategyConfig.MAX_OPEN_POSITIONS}) reached` };
         }
         // Max trades per hour
         const oneHourAgo = Date.now() - 3600 * 1000;
         const recentTrades = this.tradeTimestamps.filter(ts => ts > oneHourAgo);
-        if (recentTrades.length >= env_1.env.MAX_TRADES_PER_HOUR) {
-            return { allowed: false, reason: `Max trades per hour (${env_1.env.MAX_TRADES_PER_HOUR}) reached` };
+        if (recentTrades.length >= strategyConfig_1.strategyConfig.MAX_TRADES_PER_HOUR) {
+            return { allowed: false, reason: `Max trades per hour (${strategyConfig_1.strategyConfig.MAX_TRADES_PER_HOUR}) reached` };
         }
         // Per-token cooldown
         const tokenCooldown = this.tokenCooldowns.get(signal.tokenMint);

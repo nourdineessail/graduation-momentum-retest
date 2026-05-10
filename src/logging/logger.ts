@@ -9,6 +9,15 @@ const transport = pino.transport({
         translateTime: 'SYS:standard',
       },
     },
+    {
+      target: 'pino-pretty',
+      options: {
+        colorize: false,
+        translateTime: 'SYS:standard',
+        destination: './logs/bot.log',
+        append: true
+      },
+    }
   ],
 });
 

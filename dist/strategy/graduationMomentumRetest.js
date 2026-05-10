@@ -24,7 +24,12 @@ class GraduationMomentumRetest extends events_1.EventEmitter {
     async onPoolDetected(pool) {
         this.stateMachine.initializePool(pool);
         // Asynchronous safety check
-        const safety = await tokenSafetyFilter_1.TokenSafetyFilter.checkSafety(pool.tokenMint);
+        const safety = await tokenSafetyFilter_1.TokenSafetyFilter.checkSafety({
+            tokenMint: pool.tokenMint,
+            poolAddress: pool.poolAddress,
+            baseVault: pool.baseVault,
+            quoteVault: pool.quoteVault
+        });
         if (!safety.passed) {
             this.rejectPool(pool.poolAddress, `Safety check failed: ${safety.reason}`);
             return;
@@ -45,11 +50,22 @@ class GraduationMomentumRetest extends events_1.EventEmitter {
         catch (error) {
             logger_1.logger.error('Error evaluating strategy state', { poolAddress, error });
             this.stateMachine.transition(poolAddress, 'ERROR', String(error));
+            this.initialPrices.delete(poolAddress);
+            this.signalWindowStarts.delete(poolAddress);
+            this.emit('poolErrored', poolAddress, String(error));
         }
     }
     evaluateState(pool, marketData, state) {
         if (marketData.dataQuality === 'MOCKED' && !env_1.env.ALLOW_MOCKED_DATA) {
             this.rejectPool(pool.poolAddress, 'MOCKED data rejected by env config');
+            return;
+        }
+        if (marketData.dataQuality === 'PARTIAL' && !env_1.env.ALLOW_PARTIAL_DATA) {
+            this.rejectPool(pool.poolAddress, 'PARTIAL data rejected by env config');
+            return;
+        }
+        if (marketData.dataQuality === 'UNKNOWN') {
+            this.rejectPool(pool.poolAddress, 'UNKNOWN data quality rejected');
             return;
         }
         // Universal liquidity check - drop immediately if liquidity vanishes
@@ -127,6 +143,7 @@ class GraduationMomentumRetest extends events_1.EventEmitter {
         this.stateMachine.transition(poolAddress, 'REJECTED', reason);
         this.initialPrices.delete(poolAddress);
         this.signalWindowStarts.delete(poolAddress);
+        this.emit('poolRejected', poolAddress, reason);
         logger_1.logger.debug(`Pool ${poolAddress} rejected: ${reason}`);
     }
     generateEntrySignal(pool, marketData) {
@@ -142,6 +159,9 @@ class GraduationMomentumRetest extends events_1.EventEmitter {
             localHigh: marketData.localHigh,
             pullbackPercent: marketData.pullbackPercent,
             vwap: marketData.vwap,
+            dataQuality: marketData.dataQuality,
+            quoteVaultDeltaUsd: marketData.quoteVaultDeltaUsd,
+            flowDirection: marketData.flowDirection,
             netBuyPressure: marketData.netBuyPressure,
             uniqueBuyers: marketData.uniqueBuyers,
             passed: true,

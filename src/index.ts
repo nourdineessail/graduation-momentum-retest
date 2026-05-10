@@ -67,6 +67,11 @@ const poolWatcher = new RaydiumPoolWatcher();
 // Track last market data per pool for stale detection and emergency exits
 const lastMarketData: Map<string, MarketData> = new Map();
 
+function stopWatchingPool(poolAddress: string) {
+  marketDataService.unwatchPool(poolAddress);
+  lastMarketData.delete(poolAddress);
+}
+
 // ─── Pool Watcher Events ─────────────────────────────────────────────────────
 poolWatcher.on('newPool', async (pool: PoolInfo) => {
   LocalFileLogger.log('INFO', 'Main', 'POOL_DETECTED', `Pool: ${pool.poolAddress}`, pool, { token: pool.tokenMint, pool: pool.poolAddress });
@@ -89,7 +94,7 @@ marketDataService.on('update', (poolAddress: string, marketData: MarketData) => 
   const poolInfo = strategy['stateMachine']?.getPoolInfo(poolAddress);
   if (poolInfo && minutesSince(poolInfo.createdAt) > strategyConfig.MAX_TOKEN_AGE_MINUTES) {
     logger.info(`Pool ${poolAddress} exceeded max age. Removing.`);
-    marketDataService.unwatchPool(poolAddress);
+    stopWatchingPool(poolAddress);
     return;
   }
 
@@ -103,6 +108,16 @@ marketDataService.on('update', (poolAddress: string, marketData: MarketData) => 
   strategy.onMarketDataUpdate(poolAddress, marketData);
 });
 
+strategy.on('poolRejected', (poolAddress: string, reason: string) => {
+  stopWatchingPool(poolAddress);
+  logger.info(`Stopped market data polling for rejected pool ${poolAddress}`, { reason });
+});
+
+strategy.on('poolErrored', (poolAddress: string, error: string) => {
+  stopWatchingPool(poolAddress);
+  logger.info(`Stopped market data polling for errored pool ${poolAddress}`, { error });
+});
+
 // ─── Strategy Signal Events ───────────────────────────────────────────────────
 strategy.on('signal', async (signal: Signal) => {
   const riskCheck = riskManager.canTrade(signal);
@@ -110,6 +125,7 @@ strategy.on('signal', async (signal: Signal) => {
     logger.warn(`Risk manager blocked trade: ${riskCheck.reason}`, { signalId: signal.id });
     LocalFileLogger.log('WARN', 'RiskManager', 'ENTRY_BLOCKED', riskCheck.reason || 'Blocked', {}, { token: signal.tokenMint, pool: signal.poolAddress });
     performanceTracker.recordRejectedSignal();
+    stopWatchingPool(signal.poolAddress);
     return;
   }
 
@@ -123,6 +139,8 @@ strategy.on('signal', async (signal: Signal) => {
     riskManager.onTradeOpened(trade);
     performanceTracker.recordTrade(trade);
     TelegramNotifier.tradeOpened(trade.tradeId, trade.tokenMint, trade.entryPrice, trade.positionSizeUsd);
+  } else {
+    stopWatchingPool(signal.poolAddress);
   }
 });
 
@@ -145,7 +163,7 @@ positionManager.on('fullExit', async (event: any) => {
   riskManager.onTradeClosed(event.trade);
   performanceTracker.recordTrade(event.trade);
   strategy.notifyTradeClosed(event.trade.poolAddress);
-  marketDataService.unwatchPool(event.trade.poolAddress);
+  stopWatchingPool(event.trade.poolAddress);
 
   const isTP = event.exitReason?.includes('TAKE_PROFIT');
   const isSL = event.exitReason === 'STOP_LOSS';

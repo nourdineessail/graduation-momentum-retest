@@ -54,6 +54,9 @@ export class GraduationMomentumRetest extends EventEmitter {
     } catch (error) {
       logger.error('Error evaluating strategy state', { poolAddress, error });
       this.stateMachine.transition(poolAddress, 'ERROR', String(error));
+      this.initialPrices.delete(poolAddress);
+      this.signalWindowStarts.delete(poolAddress);
+      this.emit('poolErrored', poolAddress, String(error));
     }
   }
 
@@ -150,6 +153,7 @@ export class GraduationMomentumRetest extends EventEmitter {
     this.stateMachine.transition(poolAddress, 'REJECTED', reason);
     this.initialPrices.delete(poolAddress);
     this.signalWindowStarts.delete(poolAddress);
+    this.emit('poolRejected', poolAddress, reason);
     logger.debug(`Pool ${poolAddress} rejected: ${reason}`);
   }
 

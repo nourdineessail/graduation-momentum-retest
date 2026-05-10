@@ -79,11 +79,30 @@ export class MarketDataService extends EventEmitter {
 
         if (!baseVaultInfo || !quoteVaultInfo) continue;
 
-        // In a real implementation, we use SPL Token Account layout to decode the balance.
-        // For this simulation, we'll approximate extraction from the raw data buffer.
-        // The balance in an SPL Token Account is at offset 64, length 8 (u64).
-        const baseBalance = baseVaultInfo.data.readBigUInt64LE(64);
-        const quoteBalance = quoteVaultInfo.data.readBigUInt64LE(64);
+        let baseBalance: bigint;
+        let quoteBalance: bigint;
+
+        if (pool.baseVault === pool.quoteVault) {
+          // Pump.fun Bonding Curve Layout (Anchor PDA)
+          // 8-byte discriminator, then virtualTokenReserves (8), then virtualSolReserves (16)
+          if (baseVaultInfo.data.length >= 24) {
+            baseBalance = baseVaultInfo.data.readBigUInt64LE(8);
+            quoteBalance = baseVaultInfo.data.readBigUInt64LE(16);
+          } else {
+            baseBalance = 0n;
+            quoteBalance = 0n;
+          }
+        } else {
+          // Standard SPL Token Account layout
+          // The balance is at offset 64, length 8 (u64).
+          if (baseVaultInfo.data.length >= 72 && quoteVaultInfo.data.length >= 72) {
+            baseBalance = baseVaultInfo.data.readBigUInt64LE(64);
+            quoteBalance = quoteVaultInfo.data.readBigUInt64LE(64);
+          } else {
+            baseBalance = 0n;
+            quoteBalance = 0n;
+          }
+        }
 
         // Use cached decimals or fallback
         const cachedDecimals = this.decimalsCache.get(pool.poolAddress) || { base: 6, quote: pool.quoteMint.includes('EPj') ? 6 : 9 };
